@@ -79,6 +79,85 @@ MainComponent::MainComponent() : AudioAppComponent()
     metronomeBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2a2a2a));
     metronomeBtn.setColour(juce::TextButton::buttonOnColourId, juce::Colours::darkorange);
 
+    for (int i = 0; i < 8; ++i)
+        nativeSynth.addVoice(new MidawSynthVoice());
+    nativeSynth.addSound(new MidawSynthSound());
+
+    addAndMakeVisible(synthPresetBox);
+    synthPresetBox.addItem("Pad Suave", 1);
+    synthPresetBox.addItem("E-Piano", 2);
+    synthPresetBox.addItem("Synth Lead", 3);
+    synthPresetBox.setSelectedId(2);
+    synthPresetBox.onChange = [this]
+        {
+            int id = synthPresetBox.getSelectedId();
+            for (int i = 0; i < nativeSynth.getNumVoices(); ++i)
+                if (auto* v = dynamic_cast<MidawSynthVoice*>(nativeSynth.getVoice(i)))
+                    v->presetType = id;
+        };
+
+    addAndMakeVisible(midiKeyboard);
+
+    synthPresetBox.setVisible(false);
+
+    
+
+    browserModel.owner = this;
+
+    addAndMakeVisible(browserSearchBox);
+    browserSearchBox.setTextToShowWhenEmpty("Buscar sonido o VST3...", juce::Colours::grey);
+    browserSearchBox.setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xff181818));
+    browserSearchBox.onTextChange = [this] { rebuildBrowserList(); };
+
+    auto setupCatBtn = [this](juce::TextButton& b, int catId)
+        {
+            addAndMakeVisible(b);
+            b.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff232323));
+            b.onClick = [this, catId]
+                {
+                    browserCategory = catId;
+                    rebuildBrowserList();
+                };
+        };
+    setupCatBtn(catAllBtn, 0);
+    setupCatBtn(catNativeBtn, 1);
+    setupCatBtn(catPluginsBtn, 2);
+
+    addAndMakeVisible(scanVstBtn);
+    scanVstBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2b4c3f));
+    scanVstBtn.onClick = [this] { scanForVst3Plugins(); };
+
+    addAndMakeVisible(openGuiBtn);
+    openGuiBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2d4a53));
+    openGuiBtn.onClick = [this]
+        {
+            if (activeVstPlugin != nullptr && activeVstPlugin->hasEditor())
+            {
+                if (activePluginWindow == nullptr)
+                    activePluginWindow = std::make_unique<PluginEditorWindow>(loadedPluginName, activeVstPlugin->createEditorIfNeeded());
+                activePluginWindow->setVisible(true);
+                activePluginWindow->toFront(true);
+            }
+        };
+
+    addAndMakeVisible(unloadVstBtn);
+    unloadVstBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff4a1c1c));
+    unloadVstBtn.onClick = [this]
+        {
+            activePluginWindow.reset();
+            activeVstPlugin.reset();
+            loadedPluginName = "Ninguno";
+            repaint();
+        };
+
+    addAndMakeVisible(browserListBox);
+    browserListBox.setRowHeight(24);
+    browserListBox.setColour(juce::ListBox::backgroundColourId, juce::Colour(0xff161616));
+
+    rebuildBrowserList();
+
+
+
 
     playButton.onClick = [this] { isPlaying = true; };
     stopButton.onClick = [this] { isPlaying = false; };
@@ -233,6 +312,8 @@ void MainComponent::loadSessionFromFile()
                     ch->eqHighSlider.setValue(chXml->getDoubleAttribute("high", 0.0));
                 }
                 layoutDynamicChannels();
+                
+
             }
         });
 }
@@ -359,6 +440,7 @@ void MainComponent::addAudioChannel(double defaultFreq)
     strip->loadAudioBtn.onClick = [this, strip] { loadSampleIntoChannel(strip); };
     channelContainer.addAndMakeVisible(strip);
     layoutDynamicChannels();
+   
 }
 
 void MainComponent::loadSampleIntoChannel(AudioChannelStrip* strip)
@@ -524,6 +606,14 @@ void MainComponent::timerCallback()
 void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill)
 {
     bufferToFill.clearActiveBufferRegion();
+    juce::MidiBuffer incomingMidi;
+    keyboardState.processNextMidiBuffer(incomingMidi, bufferToFill.startSample, bufferToFill.numSamples, true);
+    nativeSynth.renderNextBlock(*bufferToFill.buffer, incomingMidi, bufferToFill.startSample, bufferToFill.numSamples);
+    if (activeVstPlugin != nullptr)
+        activeVstPlugin->processBlock(*bufferToFill.buffer, incomingMidi);
+
+
+
 
     float masterVol = (float)masterVolumeSlider.getValue();
 
@@ -564,10 +654,6 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
                         w = ch->sampleBuffer.getSample(0, ch->samplePlayPos);
                         ch->samplePlayPos = (ch->samplePlayPos + 1) % ch->sampleBuffer.getNumSamples();
                     }
-                    else
-                    {
-                        w = generateWave(ch->phase, ch->waveSelector.getSelectedId());
-                    }
 
                     w = ch->processSampleWithEq(w);
                     float pan = (float)ch->panSlider.getValue();
@@ -575,13 +661,7 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
                     dryRight += w * vol * pan;
                 }
 
-                {
-                    float w = generateWave(ch->phase, ch->waveSelector.getSelectedId());
-                    w = ch->processSampleWithEq(w);
-                    float pan = (float)ch->panSlider.getValue();
-                    dryLeft += w * vol * (1.0f - pan);
-                    dryRight += w * vol * pan;
-                }
+                
 
                 ch->phase += ch->freqSlider.getValue() / blindRate;
                 if (ch->phase >= 1.0) ch->phase -= 1.0;
@@ -704,7 +784,21 @@ if (scopeW > 80 && !scopeBuffer.empty())
 }
 
 int chY = 93;
-int chH = getHeight() - 108;
+int chH = getHeight() - 176;
+
+// Fondo del Browser estilo Ableton (Izquierda)
+g.setColour(juce::Colour(0xff161616));
+g.fillRoundedRectangle(15.0f, (float)chY, 250.0f, (float)chH, 8.0f);
+g.setColour(juce::Colours::white.withAlpha(0.12f));
+g.drawRoundedRectangle(15.0f, (float)chY, 250.0f, (float)chH, 8.0f, 1.0f);
+g.setColour(juce::Colours::cyan);
+g.setFont(juce::FontOptions(12.0f, juce::Font::bold));
+g.drawText("BROWSER | ACTIVO: " + loadedPluginName, 22, chY + 4, 236, 18, juce::Justification::centredLeft, true);
+
+// Fondo de los Canales (Centro)
+g.setColour(juce::Colour(0xff1a1a1a));
+g.fillRoundedRectangle(275.0f, (float)chY, (float)(getWidth() - 535), (float)chH, 8.0f);
+
 
 
     int fxX = getWidth() - 245;
@@ -807,10 +901,21 @@ void MainComponent::resized()
 
 
     int chY = menuH + 65;
-    int chH = getHeight() - (menuH + 80);
+    int keyH = 68;
+    int chH = getHeight() - (menuH + 80) - keyH;
 
-    channelViewport.setBounds(20, chY, getWidth() - 280, chH + 15);
-    layoutDynamicChannels();
+    int brX = 15, brW = 250;
+    browserSearchBox.setBounds(brX + 6, chY + 26, brW - 12, 24);
+    catAllBtn.setBounds(brX + 6, chY + 54, 70, 24);
+    catNativeBtn.setBounds(brX + 6, chY + 82, 70, 24);
+    catPluginsBtn.setBounds(brX + 6, chY + 110, 70, 24);
+    scanVstBtn.setBounds(brX + 6, chY + 142, 70, 26);
+    openGuiBtn.setBounds(brX + 6, chY + 174, 70, 24);
+    unloadVstBtn.setBounds(brX + 6, chY + 202, 70, 24);
+    browserListBox.setBounds(brX + 80, chY + 54, brW - 86, chH - 60);
+
+    channelViewport.setBounds(275, chY, getWidth() - 535, chH + 15);
+    midiKeyboard.setBounds(15, getHeight() - keyH - 5, getWidth() - 30, keyH);
 
     int fxX = getWidth() - 245;
     int fxW = 100;
@@ -825,4 +930,138 @@ void MainComponent::resized()
     if (audioSetupComp != nullptr && showAudioSetup)
         audioSetupComp->setBounds(440, chY, getWidth() - 700, chH);
 }
-void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate) { masterReverb.setSampleRate(sampleRate); }
+
+void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
+{
+    masterReverb.setSampleRate(sampleRate);
+    nativeSynth.setCurrentPlaybackSampleRate(sampleRate);
+
+}
+
+//==============================================================================
+// Logica del Browser estilo Ableton + Escaneo y Carga de Plugins VST3
+int MainComponent::BrowserListModel::getNumRows()
+{
+    return owner != nullptr ? owner->browserItemNames.size() : 0;
+}
+
+void MainComponent::BrowserListModel::paintListBoxItem(int row, juce::Graphics& g, int width, int height, bool selected)
+{
+    if (owner == nullptr || row < 0 || row >= owner->browserItemNames.size())
+        return;
+
+    if (selected)
+        g.fillAll(juce::Colour(0xff2d5a68));
+    else if (row % 2 == 1)
+        g.fillAll(juce::Colour(0xff1b1b1b));
+
+    int type = owner->browserItemTypes[row];
+    g.setColour(type < 100 ? juce::Colours::mediumspringgreen : juce::Colours::orange);
+    g.fillRoundedRectangle(6.0f, (height - 8.0f) * 0.5f, 8.0f, 8.0f, 4.0f);
+
+    g.setColour(juce::Colours::white);
+    g.setFont(13.0f);
+    g.drawText(owner->browserItemNames[row], 20, 0, width - 24, height, juce::Justification::centredLeft, true);
+}
+
+void MainComponent::BrowserListModel::selectedRowsChanged(int lastRowSelected)
+{
+    if (owner != nullptr)
+        owner->selectedBrowserRow = lastRowSelected;
+}
+
+void MainComponent::BrowserListModel::listBoxItemDoubleClicked(int row, const juce::MouseEvent&)
+{
+    if (owner != nullptr)
+        owner->loadBrowserItem(row);
+}
+
+void MainComponent::rebuildBrowserList()
+{
+    browserItemNames.clear();
+    browserItemTypes.clear();
+    auto query = browserSearchBox.getText().trim().toLowerCase();
+
+    auto tryAdd = [&](const juce::String& label, int typeId)
+        {
+            if (query.isEmpty() || label.toLowerCase().contains(query))
+            {
+                browserItemNames.add(label);
+                browserItemTypes.add(typeId);
+            }
+        };
+
+    if (browserCategory == 0 || browserCategory == 1)
+    {
+        tryAdd("[Nativo] Pad Suave", 1);
+        tryAdd("[Nativo] E-Piano", 2);
+        tryAdd("[Nativo] Synth Lead", 3);
+    }
+
+    if (browserCategory == 0 || browserCategory == 2)
+    {
+        auto types = knownPlugins.getTypes();
+        for (int i = 0; i < types.size(); ++i)
+            tryAdd(types[i].manufacturerName + " - " + types[i].name, 100 + i);
+    }
+
+    browserListBox.updateContent();
+    repaint();
+}
+
+void MainComponent::loadBrowserItem(int row)
+{
+    if (row < 0 || row >= browserItemTypes.size())
+        return;
+
+    int typeId = browserItemTypes[row];
+    if (typeId < 100)
+    {
+        activePluginWindow.reset();
+        activeVstPlugin.reset();
+        loadedPluginName = browserItemNames[row];
+        for (int i = 0; i < nativeSynth.getNumVoices(); ++i)
+            if (auto* v = dynamic_cast<MidawSynthVoice*>(nativeSynth.getVoice(i)))
+                v->presetType = typeId;
+        repaint();
+        return;
+    }
+
+    int pluginIdx = typeId - 100;
+    auto types = knownPlugins.getTypes();
+    if (pluginIdx >= 0 && pluginIdx < types.size())
+    {
+        juce::String errorMsg;
+        double sr = deviceManager.getCurrentAudioDevice() != nullptr ? deviceManager.getCurrentAudioDevice()->getCurrentSampleRate() : 44100.0;
+        int bs = deviceManager.getCurrentAudioDevice() != nullptr ? deviceManager.getCurrentAudioDevice()->getCurrentBufferSizeSamples() : 512;
+
+        if (auto instance = pluginFormatManager.createPluginInstance(types[pluginIdx], sr, bs, errorMsg))
+        {
+            activePluginWindow.reset();
+            instance->prepareToPlay(sr, bs);
+            activeVstPlugin = std::move(instance);
+            loadedPluginName = types[pluginIdx].name;
+
+            if (activeVstPlugin->hasEditor())
+                activePluginWindow = std::make_unique<PluginEditorWindow>(loadedPluginName, activeVstPlugin->createEditorIfNeeded());
+
+            repaint();
+        }
+        else
+        {
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon, "Error cargando VST3", errorMsg);
+        }
+    }
+}
+
+void MainComponent::scanForVst3Plugins()
+{
+    for (auto* format : pluginFormatManager.getFormats())
+    {
+        juce::PluginDirectoryScanner scanner(knownPlugins, *format, format->getDefaultLocationsToSearch(), true, juce::File());
+        juce::String pluginName;
+        while (scanner.scanNextFile(true, pluginName)) {}
+    }
+    browserCategory = 2;
+    rebuildBrowserList();
+}
