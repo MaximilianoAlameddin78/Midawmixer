@@ -2,268 +2,761 @@
 
 MainComponent::MainComponent() : AudioAppComponent()
 {
-    startTimer(16);
-    setAudioChannels(0, 2);
+    startTimer(20);
+    menuBar = std::make_unique<juce::MenuBarComponent>(this);
+    addAndMakeVisible(*menuBar);
+    formatManager.registerBasicFormats();
 
-    // Registrar este componente como receptor global de mensajes MIDI
+    setAudioChannels(0, 2);
     deviceManager.addMidiInputDeviceCallback({}, this);
 
-    // ================= CANAL 1 =================
-    addAndMakeVisible(volumeSlider1);
-    volumeSlider1.setSliderStyle(juce::Slider::LinearVertical);
-    volumeSlider1.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 50, 18);
-    volumeSlider1.setRange(0.0, 1.0, 0.01);
-    volumeSlider1.setValue(0.5);
-    volumeSlider1.setColour(juce::Slider::thumbColourId, juce::Colours::orangered);
-    volumeSlider1.setColour(juce::Slider::trackColourId, juce::Colours::white);
+    delayBufferLeft.resize(96000, 0.0f);
+    delayBufferRight.resize(96000, 0.0f);
 
-    addAndMakeVisible(freqSlider1);
-    freqSlider1.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-    freqSlider1.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 50, 16);
-    freqSlider1.setRange(50.0, 2000.0, 1.0); // Rango ampliado para cubrir todas las octavas del KeyStep
-    freqSlider1.setValue(440.0);
-    freqSlider1.setColour(juce::Slider::rotarySliderFillColourId, juce::Colours::crimson);
-    freqSlider1.setColour(juce::Slider::thumbColourId, juce::Colours::white);
+    addAndMakeVisible(channelViewport);
+    channelViewport.setViewedComponent(&channelContainer, false);
+    channelViewport.setScrollBarsShown(false, true);
 
-    addAndMakeVisible(panSlider1);
-    panSlider1.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-    panSlider1.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 50, 16);
-    panSlider1.setRange(0.0, 1.0, 0.01);
-    panSlider1.setValue(0.5);
-    panSlider1.setColour(juce::Slider::rotarySliderFillColourId, juce::Colours::dodgerblue);
-    panSlider1.setColour(juce::Slider::thumbColourId, juce::Colours::white);
+    addAudioChannel(440.0);
+    addAudioChannel(554.0);
+    addMidiChannel();
+    addMidiChannel();
 
-    // ================= CANAL 2 =================
-    addAndMakeVisible(volumeSlider2);
-    volumeSlider2.setSliderStyle(juce::Slider::LinearVertical);
-    volumeSlider2.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 50, 18);
-    volumeSlider2.setRange(0.0, 1.0, 0.01);
-    volumeSlider2.setValue(0.5);
-    volumeSlider2.setColour(juce::Slider::thumbColourId, juce::Colours::orangered);
-    volumeSlider2.setColour(juce::Slider::trackColourId, juce::Colours::white);
+    auto setupFxKnob = [this](juce::Slider& knob, double minVal, double maxVal, double defVal, juce::Colour color)
+        {
+            addAndMakeVisible(knob);
+            knob.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+            knob.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 48, 15);
+            knob.setRange(minVal, maxVal, 0.01);
+            knob.setValue(defVal);
+            knob.setColour(juce::Slider::rotarySliderFillColourId, color);
+            knob.setColour(juce::Slider::thumbColourId, juce::Colours::white);
+        };
 
-    addAndMakeVisible(freqSlider2);
-    freqSlider2.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-    freqSlider2.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 50, 16);
-    freqSlider2.setRange(50.0, 2000.0, 1.0);
-    freqSlider2.setValue(554.0);
-    freqSlider2.setColour(juce::Slider::rotarySliderFillColourId, juce::Colours::crimson);
-    freqSlider2.setColour(juce::Slider::thumbColourId, juce::Colours::white);
+    setupFxKnob(reverbSizeSlider, 0.0, 1.0, 0.5, juce::Colours::mediumpurple);
+    setupFxKnob(reverbMixSlider, 0.0, 1.0, 0.0, juce::Colours::mediumpurple);
+    setupFxKnob(delayTimeSlider, 0.05, 1.0, 0.35, juce::Colours::mediumspringgreen);
+    setupFxKnob(delayFeedbackSlider, 0.0, 0.85, 0.0, juce::Colours::mediumspringgreen);
 
-    addAndMakeVisible(panSlider2);
-    panSlider2.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-    panSlider2.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 50, 16);
-    panSlider2.setRange(0.0, 1.0, 0.01);
-    panSlider2.setValue(0.5);
-    panSlider2.setColour(juce::Slider::rotarySliderFillColourId, juce::Colours::dodgerblue);
-    panSlider2.setColour(juce::Slider::thumbColourId, juce::Colours::white);
+    addAndMakeVisible(masterVolumeSlider);
+    masterVolumeSlider.setSliderStyle(juce::Slider::LinearVertical);
+    masterVolumeSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 50, 16);
+    masterVolumeSlider.setRange(0.0, 1.0, 0.01);
+    masterVolumeSlider.setValue(0.8);
+    masterVolumeSlider.setColour(juce::Slider::thumbColourId, juce::Colours::gold);
+    masterVolumeSlider.setColour(juce::Slider::trackColourId, juce::Colours::white);
 
-    // ================= TRANSPORTE Y SETUP =================
     addAndMakeVisible(playButton);
     addAndMakeVisible(stopButton);
-    addAndMakeVisible(setupButton);
-
-    playButton.setButtonText("PLAY");
-    stopButton.setButtonText("STOP");
-    setupButton.setButtonText("AUDIO SETUP");
+    addAndMakeVisible(recWavButton);
+    addAndMakeVisible(addAudioBtn);
+    addAndMakeVisible(addMidiBtn);
+    addAndMakeVisible(saveBtn);
+    addAndMakeVisible(loadBtn);
+    
 
     playButton.setColour(juce::TextButton::buttonColourId, juce::Colours::forestgreen);
     stopButton.setColour(juce::TextButton::buttonColourId, juce::Colours::darkred);
+    recWavButton.setButtonText("REC");
+    recWavButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff4a1515));
+    recWavButton.setColour(juce::TextButton::buttonOnColourId, juce::Colours::red);
+    recWavButton.setClickingTogglesState(true);
+
+    addAudioBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff3a3a3c));
+    addMidiBtn.setColour(juce::TextButton::buttonColourId, juce::Colours::deepskyblue.darker(0.4f));
+    saveBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2b4c3f));
+    loadBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2b3d4c));
     setupButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2a2a2a));
+    addAndMakeVisible(bpmSlider);
+    bpmSlider.setSliderStyle(juce::Slider::LinearBar);
+    bpmSlider.setRange(60.0, 200.0, 1.0);
+    bpmSlider.setValue(120.0);
+    bpmSlider.setTextValueSuffix(" BPM");
+    bpmSlider.setColour(juce::Slider::trackColourId, juce::Colour(0xff2b4c3f));
+
+    addAndMakeVisible(metronomeBtn);
+    metronomeBtn.setClickingTogglesState(true);
+    metronomeBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2a2a2a));
+    metronomeBtn.setColour(juce::TextButton::buttonOnColourId, juce::Colours::darkorange);
+
 
     playButton.onClick = [this] { isPlaying = true; };
     stopButton.onClick = [this] { isPlaying = false; };
+    addAudioBtn.onClick = [this] { addAudioChannel(659.0); };
+    addMidiBtn.onClick = [this] { addMidiChannel(); };
+    saveBtn.onClick = [this] { saveSessionToFile(); };
+    loadBtn.onClick = [this] { loadSessionFromFile(); };
+
+    recWavButton.onClick = [this]
+        {
+            if (recWavButton.getToggleState())
+                startMasterRecording();
+            else
+                stopMasterRecording();
+        };
+
     setupButton.onClick = [this]
         {
             showAudioSetup = !showAudioSetup;
             audioSetupComp->setVisible(showAudioSetup);
+            for (auto* m : midiChannels) m->refreshDevices();
             resized();
         };
 
-    isPlaying = false;
-
-    audioSetupComp = std::make_unique<juce::AudioDeviceSelectorComponent>(deviceManager, 0, 0, 0, 2, true, false, true, false);
+    audioSetupComp = std::make_unique<juce::AudioDeviceSelectorComponent>(deviceManager, 0, 0, 0, 2, true, true, true, false);
     addChildComponent(*audioSetupComp);
 
-    setSize(900, 620);
+    setSize(1180, 680); 
 }
 
 MainComponent::~MainComponent()
 {
+    menuBar.reset();
     deviceManager.removeMidiInputDeviceCallback({}, this);
     shutdownAudio();
 }
 
-void MainComponent::handleIncomingMidiMessage(juce::MidiInput* source, const juce::MidiMessage& message)
+void MainComponent::startMasterRecording()
 {
-    // Pasamos los mensajes al hilo gráfico de forma segura para mover perillas y faders
-    juce::MessageManager::callAsync([this, message]()
+    recordedAudioBuffer.setSize(2, 48000 * 60 * 3);
+    recordedAudioBuffer.clear();
+    recordedSamplesCount = 0;
+
+    recordedMidiSeq.clear();
+    masterRecStartTime = juce::Time::getMillisecondCounterHiRes() * 0.001;
+
+    isRecordingMaster = true;
+    recWavButton.setButtonText("REC...");
+}
+
+void MainComponent::stopMasterRecording()
+{
+    if (!isRecordingMaster) return;
+    isRecordingMaster = false;
+    recWavButton.setButtonText("REC");
+    recWavButton.setToggleState(false, juce::dontSendNotification);
+
+    auto docsDir = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+
+    if (recordedSamplesCount > 0)
+    {
+        auto outWav = docsDir.getNonexistentChildFile("Midawmixer_Session", ".wav");
+        if (auto fileStream = std::unique_ptr<juce::FileOutputStream>(outWav.createOutputStream()))
         {
-            // 1. TECLADO (Arturia KeyStep 32): Tocar una nota cambia la frecuencia y enciende el sonido
+            juce::WavAudioFormat wavFormat;
+            if (auto writer = std::unique_ptr<juce::AudioFormatWriter>(wavFormat.createWriterFor(fileStream.get(), 48000.0, 2, 24, {}, 0)))
+            {
+                fileStream.release();
+                writer->writeFromAudioSampleBuffer(recordedAudioBuffer, 0, recordedSamplesCount);
+            }
+        }
+    }
+
+    if (recordedMidiSeq.getNumEvents() > 0)
+    {
+        recordedMidiSeq.updateMatchedPairs();
+        juce::MidiFile midiFile;
+        midiFile.setTicksPerQuarterNote(960);
+        midiFile.addTrack(recordedMidiSeq);
+
+        auto outMid = docsDir.getNonexistentChildFile("Midawmixer_Session", ".mid");
+        if (auto midiStream = std::unique_ptr<juce::FileOutputStream>(outMid.createOutputStream()))
+        {
+            midiFile.writeTo(*midiStream);
+        }
+    }
+}
+
+void MainComponent::saveSessionToFile()
+{
+    fileChooser = std::make_unique<juce::FileChooser>("Guardar Proyecto Midawmixer",
+        juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),
+        "*.xml");
+    auto flags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles;
+    fileChooser->launchAsync(flags, [this](const juce::FileChooser& fc)
+        {
+            auto file = fc.getResult();
+            if (file == juce::File{}) return;
+
+            juce::XmlElement root("MidawmixerSession");
+            root.setAttribute("masterVol", masterVolumeSlider.getValue());
+            root.setAttribute("revSize", reverbSizeSlider.getValue());
+            root.setAttribute("revMix", reverbMixSlider.getValue());
+            root.setAttribute("delTime", delayTimeSlider.getValue());
+            root.setAttribute("delFeed", delayFeedbackSlider.getValue());
+
+            for (auto* ch : audioChannels)
+            {
+                auto* chXml = root.createNewChildElement("AudioChannel");
+                chXml->setAttribute("wave", ch->waveSelector.getSelectedId());
+                chXml->setAttribute("freq", ch->freqSlider.getValue());
+                chXml->setAttribute("pan", ch->panSlider.getValue());
+                chXml->setAttribute("vol", ch->volumeSlider.getValue());
+                chXml->setAttribute("low", ch->eqLowSlider.getValue());
+                chXml->setAttribute("mid", ch->eqMidSlider.getValue());
+                chXml->setAttribute("high", ch->eqHighSlider.getValue());
+            }
+
+            root.writeTo(file.withFileExtension(".xml"));
+        });
+}
+
+void MainComponent::loadSessionFromFile()
+{
+    fileChooser = std::make_unique<juce::FileChooser>("Cargar Proyecto Midawmixer",
+        juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),
+        "*.xml");
+    auto flags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+    fileChooser->launchAsync(flags, [this](const juce::FileChooser& fc)
+        {
+            auto file = fc.getResult();
+            if (file == juce::File{}) return;
+
+            if (auto xml = juce::XmlDocument::parse(file))
+            {
+                masterVolumeSlider.setValue(xml->getDoubleAttribute("masterVol", 0.8));
+                reverbSizeSlider.setValue(xml->getDoubleAttribute("revSize", 0.5));
+                reverbMixSlider.setValue(xml->getDoubleAttribute("revMix", 0.0));
+                delayTimeSlider.setValue(xml->getDoubleAttribute("delTime", 0.35));
+                delayFeedbackSlider.setValue(xml->getDoubleAttribute("delFeed", 0.0));
+
+                audioChannels.clear();
+                for (auto* chXml : xml->getChildWithTagNameIterator("AudioChannel"))
+                {
+                    addAudioChannel(chXml->getDoubleAttribute("freq", 440.0));
+                    auto* ch = audioChannels.getLast();
+                    ch->waveSelector.setSelectedId(chXml->getIntAttribute("wave", 1));
+                    ch->panSlider.setValue(chXml->getDoubleAttribute("pan", 0.5));
+                    ch->volumeSlider.setValue(chXml->getDoubleAttribute("vol", 0.6));
+                    ch->eqLowSlider.setValue(chXml->getDoubleAttribute("low", 0.0));
+                    ch->eqMidSlider.setValue(chXml->getDoubleAttribute("mid", 0.0));
+                    ch->eqHighSlider.setValue(chXml->getDoubleAttribute("high", 0.0));
+                }
+                layoutDynamicChannels();
+            }
+        });
+}
+void MainComponent::newProject()
+{
+    isPlaying = false;
+    stopMasterRecording();
+    masterVolumeSlider.setValue(0.8);
+    reverbSizeSlider.setValue(0.5);
+    reverbMixSlider.setValue(0.0);
+    delayTimeSlider.setValue(0.35);
+    delayFeedbackSlider.setValue(0.0);
+
+    audioChannels.clear();
+    midiChannels.clear();
+    addAudioChannel(440.0);
+    addAudioChannel(554.0);
+    addMidiChannel();
+    addMidiChannel();
+    layoutDynamicChannels();
+}
+
+juce::StringArray MainComponent::getMenuBarNames()
+{
+    return { "Archivo", "Canales", "Configuracion", "Ayuda" };
+}
+
+juce::PopupMenu MainComponent::getMenuForIndex(int topLevelMenuIndex, const juce::String&)
+{
+    juce::PopupMenu menu;
+
+    if (topLevelMenuIndex == 0)
+    {
+        menu.addItem(1, "Nuevo Proyecto");
+        menu.addSeparator();
+        menu.addItem(2, "Abrir Proyecto (.xml)...");
+        menu.addItem(3, "Guardar Proyecto (.xml)...");
+        menu.addSeparator();
+        menu.addItem(4, isRecordingMaster ? "Detener Grabacion (REC)" : "Grabar Master (WAV + MIDI)");
+        menu.addSeparator();
+        menu.addItem(6, "Abrir Carpeta de Grabaciones...");
+
+        menu.addItem(5, "Salir");
+    }
+    else if (topLevelMenuIndex == 1)
+    {
+        menu.addItem(10, "Agregar Canal de Audio (+ AUDIO)");
+        menu.addItem(11, "Agregar Canal MIDI (+ MIDI)");
+    }
+    else if (topLevelMenuIndex == 2)
+    {
+        menu.addItem(20, "Configuracion de Audio y MIDI...");
+    }
+    else if (topLevelMenuIndex == 3)
+    {
+        menu.addItem(30, "Soporte y Guia Rapida");
+        menu.addSeparator();
+        menu.addItem(31, "Licencia y Terminos de Uso (Dual)...");
+
+    }
+
+    return menu;
+}
+
+void MainComponent::menuItemSelected(int menuItemID, int)
+{
+    switch (menuItemID)
+    {
+    case 1:  newProject(); break;
+    case 2:  loadSessionFromFile(); break;
+    case 3:  saveSessionToFile(); break;
+    case 4:  if (isRecordingMaster) stopMasterRecording(); else { recWavButton.setToggleState(true, juce::dontSendNotification); startMasterRecording(); } break;
+    case 5:  juce::JUCEApplication::getInstance()->systemRequestedQuit(); break;
+#if ! JUCE_ANDROID && ! JUCE_IOS
+    case 6:  juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).revealToUser(); break;
+#endif
+
+    case 10: addAudioChannel(659.0); break;
+    case 11: addMidiChannel(); break;
+
+    case 20:
+        showAudioSetup = !showAudioSetup;
+        audioSetupComp->setVisible(showAudioSetup);
+        for (auto* m : midiChannels) m->refreshDevices();
+        resized();
+        break;
+
+    case 30:
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::MessageBoxIconType::InfoIcon,
+            "Soporte Midawmixer v1.0",
+            "Midawmixer Studio Console\n\n"
+            "- Transport: PLAY / STOP / REC (exporta WAV + MIDI en Documentos).\n"
+            "- Canales Audio: Oscilador + EQ 3 Bandas (HI/MID/LOW) + Pan + M/S.\n"
+            "- Canales MIDI: Enrutamiento IN/OUT + Clip Looper en vivo.\n"
+            "- Proyectos: Guarda y carga tus sesiones en formato XML desde Archivo.");
+        break;
+    case 31:
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::MessageBoxIconType::InfoIcon,
+            "Midawmixer - Terminos y Doble Licencia",
+            "Copyright (c) 2026 Maxi - Todos los derechos reservados.\n\n"
+            "Este software se distribuye bajo un esquema de DOBLE LICENCIA:\n\n"
+            "1. LICENCIA SOFTWARE LIBRE (GNU AGPLv3):\n"
+            "Libre para uso personal, educativo y proyectos de codigo abierto. "
+            "Toda modificacion, distribucion o uso en red debe mantener esta misma "
+            "licencia y publicar su codigo fuente completo.\n\n"
+            "2. LICENCIA COMERCIAL EMPRESARIAL:\n"
+            "Requerida para empresas o desarrolladores que deseen modificar, "
+            "integrar o distribuir Midawmixer en productos comerciales de codigo "
+            "cerrado sin las obligaciones de la AGPLv3.\n\n"
+            "GARANTIA: El software se entrega 'TAL CUAL', sin garantias explicitas "
+            "ni implicitas. El autor no se responsabiliza por danos o perdida de datos.");
+        break;
+
+    default: break;
+    }
+}
+
+void MainComponent::addAudioChannel(double defaultFreq)
+{
+    int nextNum = audioChannels.size() + 1;
+    auto* strip = audioChannels.add(new AudioChannelStrip(nextNum, defaultFreq));
+    strip->loadAudioBtn.onClick = [this, strip] { loadSampleIntoChannel(strip); };
+    channelContainer.addAndMakeVisible(strip);
+    layoutDynamicChannels();
+}
+
+void MainComponent::loadSampleIntoChannel(AudioChannelStrip* strip)
+{
+    fileChooser = std::make_unique<juce::FileChooser>("Cargar Audio / Loop en Canal",
+        juce::File::getSpecialLocation(juce::File::userMusicDirectory),
+        "*.wav;*.mp3;*.aiff");
+    auto flags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+    fileChooser->launchAsync(flags, [this, strip](const juce::FileChooser& fc)
+        {
+            auto file = fc.getResult();
+            if (file == juce::File{}) return;
+
+            if (auto reader = std::unique_ptr<juce::AudioFormatReader>(formatManager.createReaderFor(file)))
+            {
+                strip->sampleBuffer.setSize((int)reader->numChannels, (int)reader->lengthInSamples);
+                reader->read(&strip->sampleBuffer, 0, (int)reader->lengthInSamples, 0, true, true);
+                strip->samplePlayPos = 0;
+                strip->hasLoadedSample = true;
+                strip->loadAudioBtn.setColour(juce::TextButton::buttonColourId, juce::Colours::limegreen.darker());
+            }
+        });
+}
+
+void MainComponent::addMidiChannel()
+{
+    int nextNum = midiChannels.size() + 1;
+    auto* strip = midiChannels.add(new MidiChannelStrip(nextNum, deviceManager));
+    channelContainer.addAndMakeVisible(strip);
+    layoutDynamicChannels();
+}
+
+void MainComponent::layoutDynamicChannels()
+{
+    int chW = 118;
+
+    int chH = channelViewport.getHeight() - 15;
+    if (chH < 400) chH = 580;
+
+    int xPos = 0;
+    for (auto* aStrip : audioChannels)
+    {
+        aStrip->setBounds(xPos, 0, chW, chH);
+        xPos += chW + 8;
+    }
+    for (auto* mStrip : midiChannels)
+    {
+        mStrip->setBounds(xPos, 0, chW, chH);
+        xPos += chW + 8;
+    }
+    channelContainer.setSize(std::max(xPos, channelViewport.getWidth()), chH);
+}
+
+float MainComponent::generateWave(double phase, int waveType)
+{
+    if (waveType == 2) return (phase < 0.5) ? 0.8f : -0.8f;
+    if (waveType == 3) return (float)(2.0 * phase - 1.0) * 0.8f;
+    return (float)std::sin(phase * 2.0 * 3.14159265359);
+}
+
+void MainComponent::triggerInternalSynths(const juce::MidiMessage& message, float velocityScale)
+{
+    juce::MessageManager::callAsync([this, message, velocityScale]()
+        {
             if (message.isNoteOn())
             {
-                double noteFreq = message.getMidiNoteInHertz(message.getNoteNumber());
-                freqSlider1.setValue(noteFreq, juce::dontSendNotification);
-                freqSlider2.setValue(noteFreq * 1.5, juce::dontSendNotification); // El Canal 2 armoniza una 5ta arriba
+                double baseFreq = message.getMidiNoteInHertz(message.getNoteNumber());
+                for (int i = 0; i < audioChannels.size(); ++i)
+                {
+                    double harmonicMult = (i == 0) ? 1.0 : (i == 1 ? 1.5 : 2.0);
+                    audioChannels[i]->freqSlider.setValue(baseFreq * harmonicMult, juce::dontSendNotification);
+                }
                 isPlaying = true;
             }
             else if (message.isNoteOff())
             {
                 isPlaying = false;
             }
-            // 2. FADERS FÍSICOS (Akai APC mini mk2 envía CC 48 en Fader 1 y CC 49 en Fader 2)
             else if (message.isController())
             {
-                int ccNumber = message.getControllerNumber();
-                float normalizedValue = message.getControllerValue() / 127.0f;
-
-                if (ccNumber == 48)
-                    volumeSlider1.setValue(normalizedValue, juce::dontSendNotification);
-                else if (ccNumber == 49)
-                    volumeSlider2.setValue(normalizedValue, juce::dontSendNotification);
+                int cc = message.getControllerNumber();
+                float val = message.getControllerValue() / 127.0f;
+                int faderIdx = cc - 48;
+                if (faderIdx >= 0 && faderIdx < audioChannels.size())
+                    audioChannels[faderIdx]->volumeSlider.setValue(val, juce::dontSendNotification);
+                else if (cc == 56)
+                    masterVolumeSlider.setValue(val, juce::dontSendNotification);
             }
         });
+}
+
+void MainComponent::handleIncomingMidiMessage(juce::MidiInput* source, const juce::MidiMessage& message)
+{
+    if (source == nullptr) return;
+    juce::String sourceId = source->getIdentifier();
+
+    bool anyMidiSolo = false;
+    for (auto* m : midiChannels)
+        if (m->soloButton.getToggleState()) anyMidiSolo = true;
+
+    for (auto* m : midiChannels)
+    {
+        bool isActive = anyMidiSolo ? m->soloButton.getToggleState() : !m->muteButton.getToggleState();
+
+        if (m->assignedInId == sourceId && isActive)
+        {
+            m->hasActivity = true;
+
+            if (isRecordingMaster && (message.isNoteOn() || message.isNoteOff()))
+            {
+                double ticks = ((juce::Time::getMillisecondCounterHiRes() * 0.001) - masterRecStartTime) * 1920.0;
+                recordedMidiSeq.addEvent(message, ticks);
+            }
+
+            if (m->isRecording && (message.isNoteOn() || message.isNoteOff()))
+            {
+                double relTime = (juce::Time::getMillisecondCounterHiRes() * 0.001) - m->recordStartTime;
+                m->recordedEvents.push_back({ relTime, message });
+            }
+
+            if (m->midiOut != nullptr)
+            {
+                juce::MidiMessage outMsg = message;
+                if (outMsg.isNoteOn())
+                    outMsg.setVelocity(outMsg.getFloatVelocity() * (float)m->velSlider.getValue());
+                m->midiOut->sendMessageNow(outMsg);
+            }
+
+            triggerInternalSynths(message, (float)m->velSlider.getValue());
+        }
+    }
+}
+
+void MainComponent::timerCallback()
+{
+    double now = juce::Time::getMillisecondCounterHiRes() * 0.001;
+
+    for (auto* m : midiChannels)
+    {
+        if (m->isLooping && !m->recordedEvents.empty() && !m->muteButton.getToggleState())
+        {
+            double elapsed = std::fmod(now - m->loopStartTime, m->loopDuration);
+            if (elapsed < m->lastLoopCheckTime)
+                m->lastLoopCheckTime = 0.0;
+
+            for (const auto& ev : m->recordedEvents)
+            {
+                if (ev.timestampSeconds >= m->lastLoopCheckTime && ev.timestampSeconds < elapsed)
+                {
+                    m->hasActivity = true;
+                    if (m->midiOut != nullptr)
+                        m->midiOut->sendMessageNow(ev.message);
+                    triggerInternalSynths(ev.message, (float)m->velSlider.getValue());
+                }
+            }
+            m->lastLoopCheckTime = elapsed;
+        }
+    }
+
+    repaint();
 }
 
 void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill)
 {
     bufferToFill.clearActiveBufferRegion();
 
-    float vol1 = (float)volumeSlider1.getValue();
-    double freq1 = freqSlider1.getValue();
-    float pan1 = (float)panSlider1.getValue();
+    float masterVol = (float)masterVolumeSlider.getValue();
 
-    float vol2 = (float)volumeSlider2.getValue();
-    double freq2 = freqSlider2.getValue();
-    float pan2 = (float)panSlider2.getValue();
+    bool anySolo = false;
+    for (auto* ch : audioChannels)
+    {
+        ch->updateEqFilters(48000.0);
+        if (ch->soloButton.getToggleState()) anySolo = true;
+    }
 
     auto* leftChannel = bufferToFill.buffer->getWritePointer(0, bufferToFill.startSample);
     auto* rightChannel = bufferToFill.buffer->getWritePointer(1, bufferToFill.startSample);
 
     double blindRate = 48000.0;
-    phaseIncrement1 = freq1 / blindRate;
-    phaseIncrement2 = freq2 / blindRate;
+    int delaySamples = (int)(delayTimeSlider.getValue() * blindRate);
+    float feedback = (float)delayFeedbackSlider.getValue();
+    int bufferSize = (int)delayBufferLeft.size();
 
-    float leftGain1 = vol1 * (1.0f - pan1);
-    float rightGain1 = vol1 * pan1;
-
-    float leftGain2 = vol2 * (1.0f - pan2);
-    float rightGain2 = vol2 * pan2;
-
-    float maxLeft = 0.0f;
-    float maxRight = 0.0f;
+    int numCh = audioChannels.size();
+    float mixScale = (numCh > 0) ? (1.0f / std::sqrt((float)numCh)) : 1.0f;
 
     for (auto sampleIndex = 0; sampleIndex < bufferToFill.numSamples; ++sampleIndex)
     {
-        float outLeft = 0.0f;
-        float outRight = 0.0f;
+        float dryLeft = 0.0f, dryRight = 0.0f;
 
         if (isPlaying)
         {
-            float wave1 = (float)std::sin(phase1 * 2.0 * 3.14159265359);
-            float wave2 = (float)std::sin(phase2 * 2.0 * 3.14159265359);
+            for (auto* ch : audioChannels)
+            {
+                bool active = anySolo ? ch->soloButton.getToggleState() : !ch->muteButton.getToggleState();
+                float vol = active ? (float)ch->volumeSlider.getValue() : 0.0f;
 
-            outLeft = ((wave1 * leftGain1) + (wave2 * leftGain2)) * 0.5f;
-            outRight = ((wave1 * rightGain1) + (wave2 * rightGain2)) * 0.5f;
+                if (vol > 0.001f)
+                {
+                    float w = 0.0f;
+                    if (ch->hasLoadedSample && ch->sampleBuffer.getNumSamples() > 0)
+                    {
+                        w = ch->sampleBuffer.getSample(0, ch->samplePlayPos);
+                        ch->samplePlayPos = (ch->samplePlayPos + 1) % ch->sampleBuffer.getNumSamples();
+                    }
+                    else
+                    {
+                        w = generateWave(ch->phase, ch->waveSelector.getSelectedId());
+                    }
+
+                    w = ch->processSampleWithEq(w);
+                    float pan = (float)ch->panSlider.getValue();
+                    dryLeft += w * vol * (1.0f - pan);
+                    dryRight += w * vol * pan;
+                }
+
+                {
+                    float w = generateWave(ch->phase, ch->waveSelector.getSelectedId());
+                    w = ch->processSampleWithEq(w);
+                    float pan = (float)ch->panSlider.getValue();
+                    dryLeft += w * vol * (1.0f - pan);
+                    dryRight += w * vol * pan;
+                }
+
+                ch->phase += ch->freqSlider.getValue() / blindRate;
+                if (ch->phase >= 1.0) ch->phase -= 1.0;
+            }
+
+            dryLeft *= mixScale;
+            dryRight *= mixScale;
         }
 
-        if (leftChannel != nullptr) leftChannel[sampleIndex] = outLeft;
-        if (rightChannel != nullptr) rightChannel[sampleIndex] = outRight;
+        int readPos = (delayWritePosition - delaySamples + bufferSize) % bufferSize;
+        float delayedLeft = delayBufferLeft[readPos];
+        float delayedRight = delayBufferRight[readPos];
 
-        // Medir picos máximos para alimentar el Vúmetro LED
-        maxLeft = std::max(maxLeft, std::abs(outLeft));
-        maxRight = std::max(maxRight, std::abs(outRight));
+        delayBufferLeft[delayWritePosition] = dryLeft + (delayedLeft * feedback);
+        delayBufferRight[delayWritePosition] = dryRight + (delayedRight * feedback);
+        delayWritePosition = (delayWritePosition + 1) % bufferSize;
 
-        phase1 += phaseIncrement1;
-        if (phase1 >= 1.0) phase1 -= 1.0;
+        delayWritePosition = (delayWritePosition + 1) % bufferSize;
 
-        phase2 += phaseIncrement2;
-        if (phase2 >= 1.0) phase2 -= 1.0;
+        float clickSample = 0.0f;
+        if (isPlaying && metronomeBtn.getToggleState())
+        {
+            int samplesPerBeat = (int)((60.0 / bpmSlider.getValue()) * blindRate);
+            if (metroSampleCounter == 0)
+            {
+                metroBeepSamplesLeft = (int)(0.035 * blindRate);
+                metroPhase = 0.0;
+            }
+            metroSampleCounter = (metroSampleCounter + 1) % std::max(1, samplesPerBeat);
+
+            if (metroBeepSamplesLeft > 0)
+            {
+                clickSample = (float)std::sin(metroPhase * 2.0 * 3.14159265359) * 0.25f;
+                metroPhase += 1000.0 / blindRate;
+                --metroBeepSamplesLeft;
+            }
+        }
+        else
+        {
+            metroSampleCounter = 0;
+        }
+
+        if (leftChannel != nullptr) leftChannel[sampleIndex] = dryLeft + (delayedLeft * 0.6f) + clickSample;
+        if (rightChannel != nullptr) rightChannel[sampleIndex] = dryRight + (delayedRight * 0.6f) + clickSample;
+
     }
 
-    // Suavizar la caída de los LEDs del Vúmetro
+    reverbParams.roomSize = (float)reverbSizeSlider.getValue();
+    reverbParams.wetLevel = (float)reverbMixSlider.getValue();
+    reverbParams.dryLevel = 1.0f - (reverbParams.wetLevel * 0.4f);
+    masterReverb.setParameters(reverbParams);
+
+    if (leftChannel != nullptr && rightChannel != nullptr && reverbParams.wetLevel > 0.01f)
+        masterReverb.processStereo(leftChannel, rightChannel, bufferToFill.numSamples);
+
+    float maxLeft = 0.0f, maxRight = 0.0f;
+    for (auto sampleIndex = 0; sampleIndex < bufferToFill.numSamples; ++sampleIndex)
+    {
+        if (leftChannel != nullptr)
+        {
+            leftChannel[sampleIndex] *= masterVol;
+            maxLeft = std::max(maxLeft, std::abs(leftChannel[sampleIndex]));
+        }
+        if (rightChannel != nullptr)
+        {
+            rightChannel[sampleIndex] *= masterVol;
+            maxRight = std::max(maxRight, std::abs(rightChannel[sampleIndex]));
+        }
+    }
+
+    if (isRecordingMaster && leftChannel != nullptr && rightChannel != nullptr)
+    {
+        int spaceLeft = recordedAudioBuffer.getNumSamples() - recordedSamplesCount;
+        int samplesToCopy = std::min(bufferToFill.numSamples, spaceLeft);
+        if (samplesToCopy > 0)
+        {
+            recordedAudioBuffer.copyFrom(0, recordedSamplesCount, leftChannel, samplesToCopy);
+            recordedAudioBuffer.copyFrom(1, recordedSamplesCount, rightChannel, samplesToCopy);
+            recordedSamplesCount += samplesToCopy;
+        }
+    }
+
     currentLevelLeft = std::max(maxLeft, currentLevelLeft * 0.85f);
     currentLevelRight = std::max(maxRight, currentLevelRight * 0.85f);
 }
 
-void MainComponent::releaseResources()
-{}
+void MainComponent::releaseResources() { masterReverb.reset(); }
 
 void MainComponent::paint(juce::Graphics& g)
 {
     g.fillAll(juce::Colour(0xff141414));
 
-    g.setColour(juce::Colour(0xff1f1f1f));
-    g.fillRect(0, 0, getWidth(), 50);
-    g.setColour(juce::Colours::white.withAlpha(0.2f));
-    g.drawLine(0, 50, (float)getWidth(), 50, 1.0f);
 
-    int chY = 65;
-    int chW = 85;
-    int chH = getHeight() - 80;
+g.setColour(juce::Colour(0xff1f1f1f));
+g.fillRect(0, 28, getWidth(), 50);
+g.setColour(juce::Colours::white.withAlpha(0.2f));
+g.drawLine(0, 78, (float)getWidth(), 78, 1.0f);
+// Pantalla de Osciloscopio en tiempo real (Barra superior extendida)
+int scopeX = 765;
+int scopeW = getWidth() - 785;
 
-    // 1. Dibujar los 2 Canales
-    for (int ch = 0; ch < 2; ++ch)
+if (scopeW > 80 && !scopeBuffer.empty())
+{
+    g.setColour(juce::Colour(0xff0b1315));
+    g.fillRoundedRectangle((float)scopeX, 36.0f, (float)scopeW, 34.0f, 4.0f);
+    g.setColour(juce::Colours::cyan.withAlpha(0.5f));
+    g.drawRoundedRectangle((float)scopeX, 36.0f, (float)scopeW, 34.0f, 4.0f, 1.0f);
+
+    juce::Path wavePath;
+    float midY = 53.0f;
+    for (int i = 0; i < scopeW; ++i)
     {
-        int chX = 20 + (ch * (chW + 8));
-
-        g.setColour(juce::Colour(0xff1c1c1e));
-        g.fillRect(chX, chY, chW, chH);
-
-        g.setColour(juce::Colours::white.withAlpha(0.75f));
-        g.drawRect(chX, chY, chW, chH, 1);
-
-        g.setColour(juce::Colours::white);
-        g.fillRect(chX, chY, chW, 22);
-        g.setColour(juce::Colours::black);
-        g.setFont(juce::FontOptions(12.0f, juce::Font::bold));
-        g.drawText("CH " + juce::String(ch + 1) + " - OSC", chX, chY, chW, 22, juce::Justification::centred);
-
-        g.setColour(juce::Colours::lightgrey);
-        g.setFont(10.0f);
-        g.drawText("FREQ (Hz)", chX, chY + 28, chW, 14, juce::Justification::centred);
-        g.drawText("PAN (L/R)", chX, chY + 123, chW, 14, juce::Justification::centred);
-        g.drawText("LEVEL", chX, chY + 218, chW, 14, juce::Justification::centred);
-
-        g.setColour(juce::Colours::white.withAlpha(0.4f));
-        int faderTop = chY + 245;
-        int faderBottom = chY + chH - 35;
-        for (int i = 0; i <= 10; ++i)
-        {
-            int yPos = faderTop + (i * (faderBottom - faderTop) / 10);
-            g.drawLine((float)(chX + 12), (float)yPos, (float)(chX + 22), (float)yPos, 1.0f);
-            g.drawLine((float)(chX + chW - 22), (float)yPos, (float)(chX + chW - 12), (float)yPos, 1.0f);
-        }
-
-        g.setColour(juce::Colours::white);
-        g.fillRect(chX, chY + chH - 20, chW, 20);
-        g.setColour(juce::Colours::black);
-        g.setFont(juce::FontOptions(12.0f, juce::Font::bold));
-        g.drawText(juce::String(ch + 1), chX, chY + chH - 20, chW, 20, juce::Justification::centred);
+        int idx = (scopeWritePos + (i * (int)scopeBuffer.size() / scopeW)) % (int)scopeBuffer.size();
+        float y = midY - (scopeBuffer[idx] * 14.0f);
+        if (i == 0) wavePath.startNewSubPath((float)(scopeX + i), y);
+        else        wavePath.lineTo((float)(scopeX + i), y);
     }
+    g.setColour(juce::Colours::mediumspringgreen);
+    g.strokePath(wavePath, juce::PathStrokeType(1.5f));
+}
 
-    // 2. Dibujar la Sección Master con el Vúmetro LED Estéreo (Estilo Apogee)
-    int vuX = 215;
-    int vuW = 65;
-    g.setColour(juce::Colour(0xff1c1c1e));
-    g.setColour(juce::Colours::white.withAlpha(0.75f));
-    g.drawRect(vuX, chY, vuW, chH, 1);
+int chY = 93;
+int chH = getHeight() - 108;
 
-    g.setColour(juce::Colours::orangered);
-    g.fillRect(vuX, chY, vuW, 22);
+
+    int fxX = getWidth() - 245;
+    int fxW = 100;
+    g.setColour(juce::Colour(0xff1d1824));
+    g.fillRect(fxX, chY, fxW, chH);
+    g.setColour(juce::Colours::mediumpurple);
+    g.drawRect(fxX, chY, fxW, chH, 1);
+
+    g.setColour(juce::Colours::mediumpurple);
+    g.fillRect(fxX, chY, fxW, 22);
     g.setColour(juce::Colours::white);
     g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
-    g.drawText("MASTER", vuX, chY, vuW, 22, juce::Justification::centred);
+    g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+    g.drawText("MASTER FX", fxX, chY, fxW, 22, juce::Justification::centred);
+
+    g.setColour(juce::Colours::plum);
+    g.setFont(9.5f);
+    g.drawText("REV SIZE", fxX, chY + 32, fxW, 12, juce::Justification::centred);
+    g.drawText("REV MIX", fxX, chY + 125, fxW, 12, juce::Justification::centred);
+    g.setColour(juce::Colours::lightgreen);
+    g.drawText("DELAY TIME", fxX, chY + 235, fxW, 12, juce::Justification::centred);
+    g.drawText("FEEDBACK", fxX, chY + 328, fxW, 12, juce::Justification::centred);
+
+    g.setColour(juce::Colours::mediumpurple);
+    g.fillRect(fxX, chY + chH - 20, fxW, 20);
+    g.setColour(juce::Colours::white);
+    g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+    g.drawText("FX BUS", fxX, chY + chH - 20, fxW, 20, juce::Justification::centred);
+
+    int masterX = getWidth() - 135;
+    int masterW = 115;
+    g.setColour(juce::Colour(0xff221c1c));
+    g.fillRect(masterX, chY, masterW, chH);
+    g.setColour(juce::Colours::orangered);
+    g.drawRect(masterX, chY, masterW, chH, 2);
+
+    g.setColour(juce::Colours::orangered);
+    g.fillRect(masterX, chY, masterW, 22);
+    g.setColour(juce::Colours::white);
+    g.setFont(juce::FontOptions(12.0f, juce::Font::bold));
+    g.drawText("MASTER OUT", masterX, chY, masterW, 22, juce::Justification::centred);
 
     g.setColour(juce::Colours::lightgrey);
     g.setFont(10.0f);
-    g.drawText("L      R", vuX, chY + 28, vuW, 14, juce::Justification::centred);
+    g.drawText("MAIN VOL", masterX + 5, chY + 30, 55, 14, juce::Justification::centred);
+    g.drawText("L   R", masterX + 65, chY + 30, 42, 14, juce::Justification::centred);
 
-    // Dibujar los 20 segmentos LED por canal (Verde, Amarillo y Rojo)
-    int numLeds = 20;
-    int ledAreaTop = chY + 48;
+    int numLeds = 24;
+    int ledAreaTop = chY + 50;
     int ledAreaHeight = chH - 80;
-    int ledHeight = (ledAreaHeight / numLeds) - 3;
+    int ledHeight = (ledAreaHeight / numLeds) - 2;
 
     for (int i = 0; i < numLeds; ++i)
     {
@@ -271,48 +764,65 @@ void MainComponent::paint(juce::Graphics& g)
         int ledY = ledAreaTop + ledAreaHeight - ((i + 1) * (ledAreaHeight / numLeds));
 
         juce::Colour ledOnColor = juce::Colours::limegreen;
-        if (i >= 16) ledOnColor = juce::Colours::red;
-        else if (i >= 12) ledOnColor = juce::Colours::yellow;
+        if (i >= 20) ledOnColor = juce::Colours::red;
+        else if (i >= 15) ledOnColor = juce::Colours::yellow;
 
         bool leftLit = (currentLevelLeft * 1.8f) >= threshold;
         g.setColour(leftLit ? ledOnColor : ledOnColor.withAlpha(0.15f));
-        g.fillRect(vuX + 14, ledY, 14, ledHeight);
+        g.fillRect(masterX + 70, ledY, 13, ledHeight);
 
         bool rightLit = (currentLevelRight * 1.8f) >= threshold;
         g.setColour(rightLit ? ledOnColor : ledOnColor.withAlpha(0.15f));
-        g.fillRect(vuX + 37, ledY, 14, ledHeight);
+        g.fillRect(masterX + 88, ledY, 13, ledHeight);
     }
+
+    g.setColour(juce::Colours::orangered);
+    g.fillRect(masterX, chY + chH - 20, masterW, 20);
+    g.setColour(juce::Colours::white);
+    g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+    g.drawText("MAIN", masterX, chY + chH - 20, masterW, 20, juce::Justification::centred);
+
 }
 
 void MainComponent::resized()
 {
-    playButton.setBounds(20, 10, 75, 30);
-    stopButton.setBounds(105, 10, 75, 30);
-    setupButton.setBounds(getWidth() - 130, 10, 110, 30);
+    int menuH = 28;
+    if (menuBar != nullptr)
+        menuBar->setBounds(0, 0, getWidth(), menuH);
 
-    int chY = 65;
-    int chW = 85;
-    int chH = getHeight() - 80;
+    playButton.setBounds(20, menuH + 10, 62, 30);
+    stopButton.setBounds(88, menuH + 10, 62, 30);
+    recWavButton.setBounds(156, menuH + 10, 80, 30);
 
-    int ch1X = 20;
-    freqSlider1.setBounds(ch1X + 7, chY + 42, chW - 14, 75);
-    panSlider1.setBounds(ch1X + 7, chY + 137, chW - 14, 75);
-    volumeSlider1.setBounds(ch1X + 15, chY + 235, chW - 30, chH - 260);
+    addAudioBtn.setBounds(255, menuH + 10, 85, 30);
+    addMidiBtn.setBounds(346, menuH + 10, 85, 30);
 
-    int ch2X = 20 + (chW + 8);
-    freqSlider2.setBounds(ch2X + 7, chY + 42, chW - 14, 75);
-    panSlider2.setBounds(ch2X + 7, chY + 137, chW - 14, 75);
-    volumeSlider2.setBounds(ch2X + 15, chY + 235, chW - 30, chH - 260);
+    saveBtn.setBounds(450, menuH + 10, 65, 30);
+    loadBtn.setBounds(521, menuH + 10, 65, 30);
+    bpmSlider.setBounds(600, menuH + 10, 100, 30);
+    metronomeBtn.setBounds(710, menuH + 10, 65, 30);
+    bpmSlider.setBounds(595, menuH + 10, 95, 30);
+    metronomeBtn.setBounds(696, menuH + 10, 58, 30);
+
+
+
+    int chY = menuH + 65;
+    int chH = getHeight() - (menuH + 80);
+
+    channelViewport.setBounds(20, chY, getWidth() - 280, chH + 15);
+    layoutDynamicChannels();
+
+    int fxX = getWidth() - 245;
+    int fxW = 100;
+    reverbSizeSlider.setBounds(fxX + 14, chY + 46, fxW - 28, 72);
+    reverbMixSlider.setBounds(fxX + 14, chY + 139, fxW - 28, 72);
+    delayTimeSlider.setBounds(fxX + 14, chY + 249, fxW - 28, 72);
+    delayFeedbackSlider.setBounds(fxX + 14, chY + 342, fxW - 28, 72);
+
+    int masterX = getWidth() - 135;
+    masterVolumeSlider.setBounds(masterX + 10, chY + 50, 50, chH - 75);
 
     if (audioSetupComp != nullptr && showAudioSetup)
-        audioSetupComp->setBounds(295, 65, getWidth() - 315, getHeight() - 80);
+        audioSetupComp->setBounds(440, chY, getWidth() - 700, chH);
 }
-
-void MainComponent::timerCallback()
-{
-    repaint();
-}
-
-void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
-{}
-
+void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate) { masterReverb.setSampleRate(sampleRate); }
