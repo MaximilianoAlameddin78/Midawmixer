@@ -154,192 +154,8 @@ public:
     juce::TextButton muteButton{ "M" }, soloButton{ "S" };
     double phase = 0.0;
 };
-class MidiChannelStrip : public juce::Component
-{
-public:
-    MidiChannelStrip(int midiNumber, juce::AudioDeviceManager& dm)
-        : midiIndex(midiNumber), deviceManager(dm)
-    {
-        addAndMakeVisible(inSelector);
-        addAndMakeVisible(outSelector);
-
-        inSelector.onChange = [this]()
-            {
-                int idx = inSelector.getSelectedId() - 2;
-                auto inputs = juce::MidiInput::getAvailableDevices();
-                if (idx >= 0 && idx < inputs.size())
-                {
-                    assignedInId = inputs[idx].identifier;
-                    deviceManager.setMidiInputDeviceEnabled(assignedInId, true);
-                }
-                else
-                {
-                    assignedInId = "";
-                }
-            };
-
-        outSelector.onChange = [this]()
-            {
-                int idx = outSelector.getSelectedId() - 2;
-                auto outputs = juce::MidiOutput::getAvailableDevices();
-                if (idx >= 0 && idx < outputs.size())
-                    midiOut = juce::MidiOutput::openDevice(outputs[idx].identifier);
-                else
-                    midiOut = nullptr;
-            };
-
-        addAndMakeVisible(recButton);
-        recButton.setClickingTogglesState(true);
-        recButton.setColour(juce::TextButton::buttonOnColourId, juce::Colours::crimson);
-        recButton.onClick = [this]()
-            {
-                if (recButton.getToggleState())
-                {
-                    recordedEvents.clear();
-                    recordStartTime = juce::Time::getMillisecondCounterHiRes() * 0.001;
-                    isRecording = true;
-                    isLooping = false;
-                    loopButton.setToggleState(false, juce::dontSendNotification);
-                }
-                else
-                {
-                    isRecording = false;
-                    loopDuration = (juce::Time::getMillisecondCounterHiRes() * 0.001) - recordStartTime;
-                    if (loopDuration < 0.5) loopDuration = 2.0;
-                }
-            };
-
-        addAndMakeVisible(loopButton);
-        loopButton.setClickingTogglesState(true);
-        loopButton.setColour(juce::TextButton::buttonOnColourId, juce::Colours::limegreen);
-        loopButton.setColour(juce::TextButton::textColourOnId, juce::Colours::black);
-        loopButton.onClick = [this]()
-            {
-                isLooping = loopButton.getToggleState() && !recordedEvents.empty();
-                if (isLooping)
-                {
-                    isRecording = false;
-                    recButton.setToggleState(false, juce::dontSendNotification);
-                    loopStartTime = juce::Time::getMillisecondCounterHiRes() * 0.001;
-                    lastLoopCheckTime = 0.0;
-                }
-            };
-
-        addAndMakeVisible(muteButton);
-        muteButton.setClickingTogglesState(true);
-        muteButton.setColour(juce::TextButton::buttonOnColourId, juce::Colours::red);
-
-        addAndMakeVisible(soloButton);
-        soloButton.setClickingTogglesState(true);
-        soloButton.setColour(juce::TextButton::buttonOnColourId, juce::Colours::gold);
-        soloButton.setColour(juce::TextButton::textColourOnId, juce::Colours::black);
-
-        addAndMakeVisible(velSlider);
-        velSlider.setSliderStyle(juce::Slider::LinearVertical);
-        velSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 50, 15);
-        velSlider.setRange(0.0, 1.0, 0.01);
-        velSlider.setValue(1.0);
-        velSlider.setColour(juce::Slider::thumbColourId, juce::Colours::deepskyblue);
-        velSlider.setColour(juce::Slider::trackColourId, juce::Colours::white);
-
-        refreshDevices();
-    }
-    void refreshDevices()
-    {
-        auto inputs = juce::MidiInput::getAvailableDevices();
-        auto outputs = juce::MidiOutput::getAvailableDevices();
-
-        auto fill = [](juce::ComboBox& box, const juce::Array<juce::MidiDeviceInfo>& list)
-            {
-                int prev = box.getSelectedId();
-                box.clear();
-                box.addItem("None", 1);
-                for (int i = 0; i < list.size(); ++i)
-                    box.addItem(list[i].name, i + 2);
-                box.setSelectedId(prev > 0 ? prev : 1, juce::dontSendNotification);
-            };
-
-        fill(inSelector, inputs);
-        fill(outSelector, outputs);
-    }
-
-    void paint(juce::Graphics& g) override
-    {
-        int w = getWidth();
-        int h = getHeight();
-
-        g.setColour(juce::Colour(0xff182026));
-        g.fillRect(0, 0, w, h);
-        g.setColour(juce::Colours::deepskyblue.withAlpha(0.8f));
-        g.drawRect(0, 0, w, h, 1);
-
-        g.setColour(juce::Colours::deepskyblue);
-        g.fillRect(0, 0, w, 22);
-        g.setColour(juce::Colours::black);
-        g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
-        g.drawText("MIDI " + juce::String(midiIndex), 0, 0, w, 22, juce::Justification::centred);
-
-        g.setColour(hasActivity ? juce::Colours::limegreen : juce::Colours::darkgreen.darker());
-        g.fillEllipse((float)(w - 16), 6.0f, 10.0f, 10.0f);
-        hasActivity = false;
-
-        g.setColour(juce::Colours::lightskyblue);
-        g.setFont(9.5f);
-        g.drawText("MIDI IN", 0, 28, w, 12, juce::Justification::centred);
-        g.drawText("MIDI OUT", 0, 74, w, 12, juce::Justification::centred);
-        g.drawText("CLIP LOOPER", 0, 122, w, 12, juce::Justification::centred);
-        g.drawText("VELOCITY", 0, 245, w, 11, juce::Justification::centred);
-
-        g.setColour(juce::Colour(0xff0f1418));
-        g.fillRect(8, 168, w - 16, 18);
-        g.setColour(isRecording ? juce::Colours::crimson : (isLooping ? juce::Colours::limegreen : juce::Colours::grey));
-        g.drawRect(8, 168, w - 16, 18, 1);
-        g.setFont(9.0f);
-        juce::String statusTxt = isRecording ? "REC..." : (isLooping ? "PLAYING" : (recordedEvents.empty() ? "EMPTY" : "CLIP OK"));
-        g.drawText(statusTxt, 8, 168, w - 16, 18, juce::Justification::centred);
-
-        g.setColour(juce::Colours::deepskyblue);
-        g.fillRect(0, h - 20, w, 20);
-        g.setColour(juce::Colours::black);
-        g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
-        g.drawText("M" + juce::String(midiIndex), 0, h - 20, w, 20, juce::Justification::centred);
-    }
-
-    void resized() override
-    {
-        int w = getWidth();
-        int h = getHeight();
-
-        inSelector.setBounds(6, 42, w - 12, 22);
-        outSelector.setBounds(6, 88, w - 12, 22);
-        recButton.setBounds(8, 138, 38, 22);
-        loopButton.setBounds(50, 138, 38, 22);
-        muteButton.setBounds(10, 218, 35, 22);
-        soloButton.setBounds(50, 218, 35, 22);
-        velSlider.setBounds(15, 258, w - 30, h - 282);
-    }
-
-    int midiIndex;
-    juce::AudioDeviceManager& deviceManager;
-    juce::ComboBox inSelector, outSelector;
-    juce::TextButton recButton{ "REC" }, loopButton{ "LOOP" };
-    juce::TextButton muteButton{ "M" }, soloButton{ "S" };
-    juce::Slider velSlider;
-
-    juce::String assignedInId;
-    std::unique_ptr<juce::MidiOutput> midiOut;
-    bool hasActivity = false;
-
-    bool isRecording = false;
-    bool isLooping = false;
-    double recordStartTime = 0.0;
-    double loopDuration = 2.0;
-    double loopStartTime = 0.0;
-    double lastLoopCheckTime = 0.0;
-    std::vector<RecordedMidiEvent> recordedEvents;
-};
 //==============================================================================
-// Instrumento Virtual Nativo Polifónico (Synth con ADSR)
+// Instrumento Virtual Nativo Polifónico por Canal (Synth con Pitch Bend y Mod)
 struct MidawSynthSound : public juce::SynthesiserSound
 {
     bool appliesToNote(int) override { return true; }
@@ -439,6 +255,276 @@ private:
     double pitchBendFactor = 1.0;
     float modWheelDepth = 0.0f;
 };
+
+class MidiChannelStrip : public juce::Component
+{
+public:
+    MidiChannelStrip(int midiNumber, juce::AudioDeviceManager& dm)
+        : midiIndex(midiNumber), deviceManager(dm)
+    {
+        addAndMakeVisible(inSelector);
+        addAndMakeVisible(outSelector);
+        addAndMakeVisible(instSelector);
+
+        // Inicializar sintetizador polifonico propio de este canal (8 voces)
+        for (int v = 0; v < 8; ++v)
+            channelSynth.addVoice(new MidawSynthVoice());
+        channelSynth.addSound(new MidawSynthSound());
+        channelSynth.setCurrentPlaybackSampleRate(48000.0);
+
+        instSelector.addItem("None (Off)", 1);
+        instSelector.addItem("Sine Pad", 2);
+        instSelector.addItem("Harmonic Keys", 3);
+        instSelector.addItem("Saw Lead", 4);
+        // Por defecto: Canal 1 usa Harmonic Keys y Canal 2 usa Saw Lead para distinguirlos al instante
+        instSelector.setSelectedId(midiNumber == 1 ? 3 : (midiNumber == 2 ? 4 : 1), juce::dontSendNotification);
+        selectedInstrumentMode = instSelector.getSelectedId() - 1;
+        updateSynthPreset();
+
+        instSelector.onChange = [this]()
+            {
+                selectedInstrumentMode = instSelector.getSelectedId() - 1;
+                if (selectedInstrumentMode == 0)
+                    channelSynth.allNotesOff(0, false);
+                else
+                    updateSynthPreset();
+            };
+
+        inSelector.onChange = [this]()
+            {
+                int idx = inSelector.getSelectedId() - 2;
+                auto inputs = juce::MidiInput::getAvailableDevices();
+                if (idx >= 0 && idx < inputs.size())
+                {
+                    assignedInId = inputs[idx].identifier;
+                    deviceManager.setMidiInputDeviceEnabled(assignedInId, true);
+                }
+                else
+                {
+                    assignedInId = "";
+                    channelSynth.allNotesOff(0, false);
+                }
+            };
+
+        outSelector.onChange = [this]()
+            {
+                int idx = outSelector.getSelectedId() - 2;
+                auto outputs = juce::MidiOutput::getAvailableDevices();
+                if (idx >= 0 && idx < outputs.size())
+                    midiOut = juce::MidiOutput::openDevice(outputs[idx].identifier);
+                else
+                    midiOut = nullptr;
+            };
+
+        addAndMakeVisible(recButton);
+        recButton.setClickingTogglesState(true);
+        recButton.setColour(juce::TextButton::buttonOnColourId, juce::Colours::crimson);
+        recButton.onClick = [this]()
+            {
+                if (recButton.getToggleState())
+                {
+                    recordedEvents.clear();
+                    recordStartTime = juce::Time::getMillisecondCounterHiRes() * 0.001;
+                    isRecording = true;
+                    isLooping = false;
+                    loopButton.setToggleState(false, juce::dontSendNotification);
+                }
+                else
+                {
+                    isRecording = false;
+                    loopDuration = (juce::Time::getMillisecondCounterHiRes() * 0.001) - recordStartTime;
+                    if (loopDuration < 0.5) loopDuration = 2.0;
+                }
+            };
+
+        addAndMakeVisible(loopButton);
+        loopButton.setClickingTogglesState(true);
+        loopButton.setColour(juce::TextButton::buttonOnColourId, juce::Colours::limegreen);
+        loopButton.setColour(juce::TextButton::textColourOnId, juce::Colours::black);
+        loopButton.onClick = [this]()
+            {
+                isLooping = loopButton.getToggleState() && !recordedEvents.empty();
+                if (isLooping)
+                {
+                    isRecording = false;
+                    recButton.setToggleState(false, juce::dontSendNotification);
+                    loopStartTime = juce::Time::getMillisecondCounterHiRes() * 0.001;
+                    lastLoopCheckTime = 0.0;
+                }
+            };
+
+        addAndMakeVisible(muteButton);
+        muteButton.setClickingTogglesState(true);
+        muteButton.setColour(juce::TextButton::buttonOnColourId, juce::Colours::red);
+
+        addAndMakeVisible(soloButton);
+        soloButton.setClickingTogglesState(true);
+        soloButton.setColour(juce::TextButton::buttonOnColourId, juce::Colours::gold);
+        soloButton.setColour(juce::TextButton::textColourOnId, juce::Colours::black);
+
+        addAndMakeVisible(velSlider);
+        velSlider.setSliderStyle(juce::Slider::LinearVertical);
+        velSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 50, 15);
+        velSlider.setRange(0.0, 1.0, 0.01);
+        velSlider.setValue(1.0);
+        velSlider.setColour(juce::Slider::thumbColourId, juce::Colours::deepskyblue);
+        velSlider.setColour(juce::Slider::trackColourId, juce::Colours::white);
+
+        refreshDevices();
+    }
+
+    void updateSynthPreset()
+    {
+        for (int v = 0; v < channelSynth.getNumVoices(); ++v)
+        {
+            if (auto* voice = dynamic_cast<MidawSynthVoice*>(channelSynth.getVoice(v)))
+                voice->presetType = juce::jlimit(1, 3, selectedInstrumentMode);
+        }
+    }
+
+    void pushIncomingMidi(const juce::MidiMessage& msg)
+    {
+        hasActivity = true;
+        juce::MidiMessage unified(msg);
+        unified.setChannel(1);
+        const juce::ScopedLock sl(channelMidiLock);
+        pendingChannelMidi.addEvent(unified, 0);
+    }
+
+    void renderChannelAudio(juce::AudioBuffer<float>& mixBuffer, int startSample, int numSamples, double sampleRate, bool anySoloActive)
+    {
+        if (sampleRate > 0.0 && std::abs(channelSynth.getSampleRate() - sampleRate) > 1.0)
+            channelSynth.setCurrentPlaybackSampleRate(sampleRate);
+
+        juce::MidiBuffer localMidi;
+        {
+            const juce::ScopedLock sl(channelMidiLock);
+            localMidi.swapWith(pendingChannelMidi);
+        }
+
+        // Si el canal esta muteado (o hay otro en Solo) o tiene Instrumento en Off, igual procesamos NoteOff para no dejar notas pegadas
+        bool isAudible = (selectedInstrumentMode > 0) && !muteButton.getToggleState() && (!anySoloActive || soloButton.getToggleState());
+
+        if (!isAudible)
+        {
+            channelSynth.allNotesOff(0, true);
+            return;
+        }
+
+        if (tempChannelBuffer.getNumChannels() != mixBuffer.getNumChannels() || tempChannelBuffer.getNumSamples() < numSamples)
+            tempChannelBuffer.setSize(mixBuffer.getNumChannels(), numSamples, false, false, true);
+
+        tempChannelBuffer.clear();
+        channelSynth.renderNextBlock(tempChannelBuffer, localMidi, 0, numSamples);
+
+        float gain = (float)velSlider.getValue();
+        for (int ch = 0; ch < mixBuffer.getNumChannels(); ++ch)
+            mixBuffer.addFrom(ch, startSample, tempChannelBuffer, ch, 0, numSamples, gain);
+    }
+
+    void refreshDevices()
+    {
+        auto inputs = juce::MidiInput::getAvailableDevices();
+        auto outputs = juce::MidiOutput::getAvailableDevices();
+
+        auto fill = [](juce::ComboBox& box, const juce::Array<juce::MidiDeviceInfo>& list)
+            {
+                int prev = box.getSelectedId();
+                box.clear();
+                box.addItem("None", 1);
+                for (int i = 0; i < list.size(); ++i)
+                    box.addItem(list[i].name, i + 2);
+                box.setSelectedId(prev > 0 ? prev : 1, juce::dontSendNotification);
+            };
+
+        fill(inSelector, inputs);
+        fill(outSelector, outputs);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        int w = getWidth();
+        int h = getHeight();
+
+        g.setColour(juce::Colour(0xff182026));
+        g.fillRect(0, 0, w, h);
+        g.setColour(juce::Colours::deepskyblue.withAlpha(0.8f));
+        g.drawRect(0, 0, w, h, 1);
+
+        g.setColour(juce::Colours::deepskyblue);
+        g.fillRect(0, 0, w, 22);
+        g.setColour(juce::Colours::black);
+        g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+        g.drawText("MIDI " + juce::String(midiIndex), 0, 0, w, 22, juce::Justification::centred);
+
+        g.setColour(hasActivity ? juce::Colours::limegreen : juce::Colours::darkgreen.darker());
+        g.fillEllipse((float)(w - 16), 6.0f, 10.0f, 10.0f);
+        hasActivity = false;
+
+        g.setColour(juce::Colours::lightskyblue);
+        g.setFont(9.5f);
+        g.drawText("MIDI IN", 0, 26, w, 12, juce::Justification::centred);
+        g.drawText("MIDI OUT", 0, 66, w, 12, juce::Justification::centred);
+        g.drawText("INSTRUMENT", 0, 106, w, 12, juce::Justification::centred);
+        g.drawText("CLIP LOOPER", 0, 146, w, 12, juce::Justification::centred);
+        g.drawText("LEVEL", 0, 260, w, 11, juce::Justification::centred);
+
+        g.setColour(juce::Colour(0xff0f1418));
+        g.fillRect(8, 186, w - 16, 16);
+        g.setColour(isRecording ? juce::Colours::crimson : (isLooping ? juce::Colours::limegreen : juce::Colours::grey));
+        g.drawRect(8, 186, w - 16, 16, 1);
+        g.setFont(9.0f);
+        juce::String statusTxt = isRecording ? "REC..." : (isLooping ? "PLAYING" : (recordedEvents.empty() ? "EMPTY" : "READY"));
+        g.drawText(statusTxt, 8, 186, w - 16, 16, juce::Justification::centred);
+
+        g.setColour(juce::Colours::deepskyblue);
+        g.fillRect(0, h - 20, w, 20);
+        g.setColour(juce::Colours::black);
+        g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+        g.drawText("M" + juce::String(midiIndex), 0, h - 20, w, 20, juce::Justification::centred);
+    }
+
+    void resized() override
+    {
+        int w = getWidth();
+        int h = getHeight();
+
+        inSelector.setBounds(6, 39, w - 12, 22);
+        outSelector.setBounds(6, 79, w - 12, 22);
+        instSelector.setBounds(6, 119, w - 12, 22);
+        recButton.setBounds(8, 160, 38, 22);
+        loopButton.setBounds(50, 160, 38, 22);
+        muteButton.setBounds(10, 232, 35, 22);
+        soloButton.setBounds(50, 232, 35, 22);
+        velSlider.setBounds(15, 273, w - 30, h - 297);
+    }
+
+    int midiIndex;
+    juce::AudioDeviceManager& deviceManager;
+    juce::ComboBox inSelector, outSelector, instSelector;
+    juce::TextButton recButton{ "REC" }, loopButton{ "LOOP" };
+    juce::TextButton muteButton{ "M" }, soloButton{ "S" };
+    juce::Slider velSlider;
+
+    juce::String assignedInId;
+    std::unique_ptr<juce::MidiOutput> midiOut;
+    bool hasActivity = false;
+    int selectedInstrumentMode = 0;
+
+    juce::Synthesiser channelSynth;
+    juce::CriticalSection channelMidiLock;
+    juce::MidiBuffer pendingChannelMidi;
+    juce::AudioBuffer<float> tempChannelBuffer;
+
+    bool isRecording = false;
+    bool isLooping = false;
+    double recordStartTime = 0.0;
+    double loopDuration = 2.0;
+    double loopStartTime = 0.0;
+    double lastLoopCheckTime = 0.0;
+    std::vector<RecordedMidiEvent> recordedEvents;
+};
+
 //==============================================================================
 // Ventana flotante para la interfaz grafica original de Plugins VST3 externos
 class PluginEditorWindow : public juce::DocumentWindow

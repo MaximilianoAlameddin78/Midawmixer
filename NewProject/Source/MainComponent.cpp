@@ -565,40 +565,19 @@ void MainComponent::handleIncomingMidiMessage(juce::MidiInput* source, const juc
     if (processDmxMidiTrigger(message))
         return;
 
-    if (message.isNoteOn() && message.getVelocity() > 0)
+    for (int i = 0; i < midiChannels.size(); ++i)
     {
-        int note = message.getNoteNumber();
-        float vel = message.getFloatVelocity();
-        juce::MessageManager::callAsync([this, note, vel]() {
-            keyboardState.noteOn(1, note, vel);
-            });
-    }
-    else if (message.isNoteOff() || (message.isNoteOn() && message.getVelocity() == 0))
-    {
-        int note = message.getNoteNumber();
-        juce::MessageManager::callAsync([this, note]() {
-            keyboardState.noteOff(1, note, 0.0f);
-            });
-    }
-    else if (message.isPitchWheel() || message.isController())
-    {
-        juce::MidiMessage unifiedMsg(message);
-        unifiedMsg.setChannel(1);
-
-        if (message.isController() && message.getControllerNumber() == 64)
+        auto* ch = midiChannels[i];
+        if (ch->assignedInId == sourceId)
         {
-            juce::MessageManager::callAsync([this, unifiedMsg]() {
-                keyboardState.processNextMidiEvent(unifiedMsg);
-                });
-        }
-        else
-        {
-            const juce::ScopedLock sl(midiControlLock);
-            pendingControlMidi.addEvent(unifiedMsg, 0);
+            ch->pushIncomingMidi(message);
+            if (ch->midiOut != nullptr)
+                ch->midiOut->sendMessageNow(message);
         }
     }
 
     return;
+
 
     bool anyMidiSolo = false;
 
@@ -684,11 +663,16 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
         bufferToFill.startSample,
         bufferToFill.numSamples
     );
-    nativeSynth.renderNextBlock(activeSubBuffer, incomingMidi, 0, bufferToFill.numSamples);
-    if (activeVstPlugin != nullptr)
-        activeVstPlugin->processBlock(*bufferToFill.buffer, incomingMidi);
+    bool anyMidiSolo = false;
+    for (int i = 0; i < midiChannels.size(); ++i)
+        if (midiChannels[i]->soloButton.getToggleState()) { anyMidiSolo = true; break; }
 
-        
+    double currentSr = deviceManager.getCurrentAudioDevice() != nullptr
+        ? deviceManager.getCurrentAudioDevice()->getCurrentSampleRate() : 48000.0;
+
+    for (int i = 0; i < midiChannels.size(); ++i)
+        midiChannels[i]->renderChannelAudio(activeSubBuffer, 0, bufferToFill.numSamples, currentSr, anyMidiSolo);
+
 
 
 
