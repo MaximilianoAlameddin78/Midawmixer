@@ -8,7 +8,12 @@ MainComponent::MainComponent() : AudioAppComponent()
     formatManager.registerBasicFormats();
 
     setAudioChannels(0, 2);
-    deviceManager.addMidiInputDeviceCallback({}, this);
+    for (const auto& input : juce::MidiInput::getAvailableDevices())
+    {
+        deviceManager.setMidiInputDeviceEnabled(input.identifier, true);
+        deviceManager.addMidiInputDeviceCallback(input.identifier, this);
+    }
+
 
     delayBufferLeft.resize(96000, 0.0f);
     delayBufferRight.resize(96000, 0.0f);
@@ -536,7 +541,7 @@ void MainComponent::handleIncomingMidiMessage(juce::MidiInput* source, const juc
 {
     if (source == nullptr) return;
     juce::String sourceId = source->getIdentifier();
-
+    keyboardState.processNextMidiEvent(message);
     bool anyMidiSolo = false;
     for (auto* m : midiChannels)
         if (m->soloButton.getToggleState()) anyMidiSolo = true;
@@ -637,7 +642,9 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
 
     for (auto sampleIndex = 0; sampleIndex < bufferToFill.numSamples; ++sampleIndex)
     {
-        float dryLeft = 0.0f, dryRight = 0.0f;
+        float dryLeft = leftChannel[sampleIndex];
+        float dryRight = rightChannel[sampleIndex];
+
 
         if (isPlaying)
         {
@@ -663,23 +670,10 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
 
                 
 
-                ch->phase += ch->freqSlider.getValue() / blindRate;
-                if (ch->phase >= 1.0) ch->phase -= 1.0;
-            }
+                
 
-            dryLeft *= mixScale;
-            dryRight *= mixScale;
-        }
-
-        int readPos = (delayWritePosition - delaySamples + bufferSize) % bufferSize;
-        float delayedLeft = delayBufferLeft[readPos];
-        float delayedRight = delayBufferRight[readPos];
-
-        delayBufferLeft[delayWritePosition] = dryLeft + (delayedLeft * feedback);
-        delayBufferRight[delayWritePosition] = dryRight + (delayedRight * feedback);
-        delayWritePosition = (delayWritePosition + 1) % bufferSize;
-
-        delayWritePosition = (delayWritePosition + 1) % bufferSize;
+     
+        
 
         float clickSample = 0.0f;
         if (isPlaying && metronomeBtn.getToggleState())
@@ -703,7 +697,20 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
         {
             metroSampleCounter = 0;
         }
+        float delayedLeft = 0.0f;
+        float delayedRight = 0.0f;
 
+        if (bufferSize > 0)
+        {
+            int readPos = (delayWritePosition - delaySamples + bufferSize) % bufferSize;
+            delayedLeft = delayBufferLeft[readPos];
+            delayedRight = delayBufferRight[readPos];
+
+            delayBufferLeft[delayWritePosition] = dryLeft + (delayedLeft * feedback);
+            delayBufferRight[delayWritePosition] = dryRight + (delayedRight * feedback);
+            delayWritePosition = (delayWritePosition + 1) % bufferSize;
+        }
+            
         if (leftChannel != nullptr) leftChannel[sampleIndex] = dryLeft + (delayedLeft * 0.6f) + clickSample;
         if (rightChannel != nullptr) rightChannel[sampleIndex] = dryRight + (delayedRight * 0.6f) + clickSample;
 
@@ -746,9 +753,15 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
 
     currentLevelLeft = std::max(maxLeft, currentLevelLeft * 0.85f);
     currentLevelRight = std::max(maxRight, currentLevelRight * 0.85f);
+    }
+
 }
+    }
+
 
 void MainComponent::releaseResources() { masterReverb.reset(); }
+
+
 
 void MainComponent::paint(juce::Graphics& g)
 {
