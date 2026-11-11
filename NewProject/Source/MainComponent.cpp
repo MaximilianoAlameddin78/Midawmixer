@@ -559,7 +559,13 @@ void MainComponent::handleIncomingMidiMessage(juce::MidiInput* source, const juc
 {
     if (source == nullptr) return;
     juce::String sourceId = source->getIdentifier();
-    keyboardState.processNextMidiEvent(message);
+    if (message.isNoteOn())
+        keyboardState.noteOn(message.getChannel(), message.getNoteNumber(), message.getFloatVelocity());
+    else if (message.isNoteOff())
+        keyboardState.noteOff(message.getChannel(), message.getNoteNumber(), message.getFloatVelocity());
+    else
+        keyboardState.processNextMidiEvent(message);
+
     bool anyMidiSolo = false;
     for (auto* m : midiChannels)
         if (m->soloButton.getToggleState()) anyMidiSolo = true;
