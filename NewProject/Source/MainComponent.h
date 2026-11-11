@@ -353,7 +353,7 @@ struct MidawSynthVoice : public juce::SynthesiserVoice
         return dynamic_cast<MidawSynthSound*> (sound) != nullptr;
     }
 
-    void startNote(int midiNoteNumber, float velocity, juce::SynthesiserSound*, int) override
+    void startNote(int midiNoteNumber, float velocity, juce::SynthesiserSound*, int currentPitchWheelPosition) override
     {
         currentAngle = 0.0;
         level = velocity * 0.5;
@@ -361,10 +361,12 @@ struct MidawSynthVoice : public juce::SynthesiserVoice
 
         double sr = getSampleRate() > 0.0 ? getSampleRate() : 48000.0;
         auto cyclesPerSecond = juce::MidiMessage::getMidiNoteInHertz(midiNoteNumber);
-        angleDelta = cyclesPerSecond / sr;
+        baseAngleDelta = cyclesPerSecond / sr;
+
+        double normPitch = (currentPitchWheelPosition - 8192) / 8192.0;
+        pitchBendFactor = std::pow(2.0, (normPitch * 2.0) / 12.0);
+        angleDelta = baseAngleDelta * pitchBendFactor;
     }
-
-
 
     void stopNote(float, bool allowTailOff) override
     {
@@ -376,11 +378,22 @@ struct MidawSynthVoice : public juce::SynthesiserVoice
         {
             clearCurrentNote();
             angleDelta = 0.0;
+            baseAngleDelta = 0.0;
         }
     }
 
-    void pitchWheelMoved(int) override {}
-    void controllerMoved(int, int) override {}
+    void pitchWheelMoved(int newPitchWheelValue) override
+    {
+        double normPitch = (newPitchWheelValue - 8192) / 8192.0;
+        pitchBendFactor = std::pow(2.0, (normPitch * 2.0) / 12.0);
+        angleDelta = baseAngleDelta * pitchBendFactor;
+    }
+
+    void controllerMoved(int controllerNumber, int newControllerValue) override
+    {
+        if (controllerNumber == 1)
+            modWheelDepth = newControllerValue / 127.0f;
+    }
 
     void renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int startSample, int numSamples) override
     {
@@ -389,9 +402,12 @@ struct MidawSynthVoice : public juce::SynthesiserVoice
             while (--numSamples >= 0)
             {
                 float raw = 0.0f;
-                if (presetType == 1)      raw = (float)std::sin(currentAngle * 2.0 * 3.14159265359);
-                else if (presetType == 2) raw = (float)(std::sin(currentAngle * 2.0 * 3.14159265359) + 0.5 * std::sin(currentAngle * 4.0 * 3.14159265359)) * 0.65f;
-                else                      raw = (float)(2.0 * std::fmod(currentAngle, 1.0) - 1.0) * 0.6f;
+                if (presetType == 1)
+                    raw = (float)std::sin(currentAngle * 2.0 * 3.14159265359);
+                else if (presetType == 2)
+                    raw = (float)(std::sin(currentAngle * 2.0 * 3.14159265359) + (0.35 + modWheelDepth * 0.65) * std::sin(currentAngle * 4.0 * 3.14159265359)) * 0.7f;
+                else
+                    raw = (float)(2.0 * std::fmod(currentAngle, 1.0) - 1.0) * (0.6f + modWheelDepth * 0.4f);
 
                 float currentSample = raw * (float)level * (tailOff > 0.0 ? (float)tailOff : 1.0f);
 
@@ -408,6 +424,7 @@ struct MidawSynthVoice : public juce::SynthesiserVoice
                     {
                         clearCurrentNote();
                         angleDelta = 0.0;
+                        baseAngleDelta = 0.0;
                         break;
                     }
                 }
@@ -418,6 +435,9 @@ struct MidawSynthVoice : public juce::SynthesiserVoice
     int presetType = 2;
 private:
     double currentAngle = 0.0, angleDelta = 0.0, level = 0.0, tailOff = 0.0;
+    double baseAngleDelta = 0.0;
+    double pitchBendFactor = 1.0;
+    float modWheelDepth = 0.0f;
 };
 //==============================================================================
 // Ventana flotante para la interfaz grafica original de Plugins VST3 externos
@@ -513,6 +533,9 @@ private:
     double metroPhase = 0.0;
     // Instrumento Virtual Nativo + Teclado en vivo
     juce::Synthesiser nativeSynth;
+    juce::CriticalSection midiControlLock;
+    juce::MidiBuffer pendingControlMidi;
+
     juce::MidiKeyboardState keyboardState;
     juce::MidiKeyboardComponent midiKeyboard{ keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard };
     juce::ComboBox synthPresetBox;

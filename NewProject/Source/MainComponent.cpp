@@ -559,14 +559,43 @@ void MainComponent::handleIncomingMidiMessage(juce::MidiInput* source, const juc
 {
     if (source == nullptr) return;
     juce::String sourceId = source->getIdentifier();
-    if (message.isNoteOn())
-        keyboardState.noteOn(message.getChannel(), message.getNoteNumber(), message.getFloatVelocity());
-    else if (message.isNoteOff())
-        keyboardState.noteOff(message.getChannel(), message.getNoteNumber(), message.getFloatVelocity());
-    else
-        keyboardState.processNextMidiEvent(message);
+    if (message.isNoteOn() && message.getVelocity() > 0)
+    {
+        int note = message.getNoteNumber();
+        float vel = message.getFloatVelocity();
+        juce::MessageManager::callAsync([this, note, vel]() {
+            keyboardState.noteOn(1, note, vel);
+            });
+    }
+    else if (message.isNoteOff() || (message.isNoteOn() && message.getVelocity() == 0))
+    {
+        int note = message.getNoteNumber();
+        juce::MessageManager::callAsync([this, note]() {
+            keyboardState.noteOff(1, note, 0.0f);
+            });
+    }
+    else if (message.isPitchWheel() || message.isController())
+    {
+        juce::MidiMessage unifiedMsg(message);
+        unifiedMsg.setChannel(1);
+
+        if (message.isController() && message.getControllerNumber() == 64)
+        {
+            juce::MessageManager::callAsync([this, unifiedMsg]() {
+                keyboardState.processNextMidiEvent(unifiedMsg);
+                });
+        }
+        else
+        {
+            const juce::ScopedLock sl(midiControlLock);
+            pendingControlMidi.addEvent(unifiedMsg, 0);
+        }
+    }
+
+    return;
 
     bool anyMidiSolo = false;
+
     for (auto* m : midiChannels)
         if (m->soloButton.getToggleState()) anyMidiSolo = true;
 
@@ -636,7 +665,12 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
 {
     bufferToFill.clearActiveBufferRegion();
     juce::MidiBuffer incomingMidi;
+    {
+        const juce::ScopedLock sl(midiControlLock);
+        incomingMidi.swapWith(pendingControlMidi);
+    }
     keyboardState.processNextMidiBuffer(incomingMidi, 0, bufferToFill.numSamples, true);
+
 
     juce::AudioBuffer<float> activeSubBuffer(
         bufferToFill.buffer->getArrayOfWritePointers(),
