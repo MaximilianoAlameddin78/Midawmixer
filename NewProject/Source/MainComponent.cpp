@@ -1200,3 +1200,145 @@ void MainComponent::scanForVst3Plugins()
     browserCategory = 2;
     rebuildBrowserList();
 }
+// ==============================================================================
+// MOTOR UNIVERSAL DE FADERS MOTORIZADOS (MCU 14-BIT + CC UNIVERSAL 7-BIT)
+// ==============================================================================
+void MainComponent::openMotorizedOutput(const juce::String& deviceIdentifier)
+{
+    motorizedMidiOut.reset();
+    motorizedOutDeviceId = deviceIdentifier;
+
+    for (int i = 0; i < 16; ++i)
+        lastSentFaderValue[i] = -1;
+
+    if (deviceIdentifier.isNotEmpty())
+    {
+        motorizedMidiOut = juce::MidiOutput::openDevice(deviceIdentifier);
+        if (motorizedMidiOut != nullptr)
+            sendAllMotorizedFaders();
+    }
+}
+
+void MainComponent::sendMotorizedFaderFeedback(int faderIndex, float normalizedValue)
+{
+    if (motorizedMidiOut == nullptr || faderIndex < 0 || faderIndex >= 16)
+        return;
+
+    // Si el usuario tiene el dedo apoyado sobre el fader fisico (Touch Sense), no pelear con el motor
+    if (faderTouched[faderIndex])
+        return;
+
+    float clamped = juce::jlimit(0.0f, 1.0f, normalizedValue);
+    int val14 = juce::roundToInt(clamped * 16383.0f);
+
+    // Evitar spam MIDI si la posicion no cambio
+    if (std::abs(val14 - lastSentFaderValue[faderIndex]) < 16 && val14 != 0 && val14 != 16383)
+        return;
+
+    lastSentFaderValue[faderIndex] = val14;
+
+    // Modo 0 (Dual Universal) o Modo 1 (Mackie Control MCU 14-bit: PitchWheel en Canales 1..9)
+    if ((motorizedFaderMode == 0 || motorizedFaderMode == 1) && faderIndex < 9)
+    {
+        int midiChannel = faderIndex + 1; // Ch 1..8 = Faders 1..8, Ch 9 = Master
+        auto mcuMsg = juce::MidiMessage::pitchWheel(midiChannel, val14);
+        motorizedMidiOut->sendMessageNow(mcuMsg);
+    }
+
+    // Modo 0 (Dual Universal) o Modo 2 (CC Universal 7-bit: CC 70..77 + CC 78 Master)
+    if (motorizedFaderMode == 0 || motorizedFaderMode == 2)
+    {
+        int val7 = juce::roundToInt(clamped * 127.0f);
+        int ccNum = 70 + faderIndex;
+        if (ccNum <= 119)
+        {
+            auto ccMsg = juce::MidiMessage::controllerEvent(1, ccNum, val7);
+            motorizedMidiOut->sendMessageNow(ccMsg);
+        }
+    }
+}
+
+void MainComponent::sendAllMotorizedFaders()
+{
+    if (motorizedMidiOut == nullptr)
+        return;
+
+    int slot = 0;
+    for (int i = 0; i < audioChannels.size() && slot < 8; ++i, ++slot)
+        sendMotorizedFaderFeedback(slot, (float)audioChannels[i]->volumeSlider.getValue());
+
+    for (int i = 0; i < midiChannels.size() && slot < 8; ++i, ++slot)
+        sendMotorizedFaderFeedback(slot, (float)midiChannels[i]->velSlider.getValue());
+
+    // Fader 9 (indice 8) = Master Volume
+    sendMotorizedFaderFeedback(8, (float)masterVolumeSlider.getValue());
+}
+
+bool MainComponent::processMotorizedSurfaceInput(const juce::MidiMessage& message)
+{
+    // 1. Deteccion tactil capacitiva MCU (Touch Sense: Notas 104..111 = Faders 1..8, Nota 112 = Master)
+    if (message.isNoteOn() || message.isNoteOff())
+    {
+        int note = message.getNoteNumber();
+        if (note >= 104 && note <= 112)
+        {
+            int idx = note - 104;
+            bool touched = message.isNoteOn() && message.getVelocity() > 0;
+            faderTouched[idx] = touched;
+            if (!touched)
+                lastSentFaderValue[idx] = -1; // Sincronizar al soltar el dedo
+            return true;
+        }
+    }
+
+    int targetFader = -1;
+    float normValue = -1.0f;
+
+    // 2. Entrada Mackie Control MCU (PitchWheel en canales 1..9)
+    if (message.isPitchWheel() && (motorizedFaderMode == 0 || motorizedFaderMode == 1))
+    {
+        int ch = message.getChannel();
+        if (ch >= 1 && ch <= 9)
+        {
+            targetFader = ch - 1;
+            normValue = juce::jlimit(0.0f, 1.0f, message.getPitchWheelValue() / 16383.0f);
+        }
+    }
+    // 3. Entrada CC Universal (CC 70..78 en canal 1)
+    else if (message.isController() && (motorizedFaderMode == 0 || motorizedFaderMode == 2))
+    {
+        int cc = message.getControllerNumber();
+        if (cc >= 70 && cc <= 78)
+        {
+            targetFader = cc - 70;
+            normValue = juce::jlimit(0.0f, 1.0f, message.getControllerValue() / 127.0f);
+        }
+    }
+
+    if (targetFader >= 0 && normValue >= 0.0f)
+    {
+        lastSentFaderValue[targetFader] = juce::roundToInt(normValue * 16383.0f);
+
+        juce::MessageManager::callAsync([this, targetFader, normValue]()
+            {
+                if (targetFader == 8)
+                {
+                    masterVolumeSlider.setValue(normValue, juce::dontSendNotification);
+                }
+                else if (targetFader < audioChannels.size())
+                {
+                    audioChannels[targetFader]->volumeSlider.setValue(normValue, juce::dontSendNotification);
+                }
+                else
+                {
+                    int midiIdx = targetFader - audioChannels.size();
+                    if (midiIdx >= 0 && midiIdx < midiChannels.size())
+                        midiChannels[midiIdx]->velSlider.setValue(normValue, juce::dontSendNotification);
+                }
+            });
+
+        return true;
+    }
+
+    return false;
+}

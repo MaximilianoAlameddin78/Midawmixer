@@ -609,7 +609,20 @@ private:
     bool isPlaying = false;
     bool showAudioSetup = false;
     float generateWave(double phase, int waveType);
-};
+    // === MOTOR UNIVERSAL DE FADERS MOTORIZADOS (MCU 14-bit + CC Universal) ===
+    std::unique_ptr<juce::MidiOutput> motorizedMidiOut;
+    juce::String motorizedOutDeviceId;
+    int motorizedFaderMode = 0; // 0: Dual Universal (MCU + CC), 1: Solo MCU 14-bit, 2: Solo CC 7-bit
+    bool faderTouched[16] = { false };
+    int lastSentFaderValue[16] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
+
+    void openMotorizedOutput(const juce::String& deviceIdentifier);
+    void sendMotorizedFaderFeedback(int faderIndex, float normalizedValue);
+    void sendAllMotorizedFaders();
+    bool processMotorizedSurfaceInput(const juce::MidiMessage& message);
+
+}
+;
 
 
   
