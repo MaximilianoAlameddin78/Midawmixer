@@ -356,11 +356,15 @@ struct MidawSynthVoice : public juce::SynthesiserVoice
     void startNote(int midiNoteNumber, float velocity, juce::SynthesiserSound*, int) override
     {
         currentAngle = 0.0;
-        level = velocity * 0.25;
+        level = velocity * 0.5;
         tailOff = 0.0;
+
+        double sr = getSampleRate() > 0.0 ? getSampleRate() : 48000.0;
         auto cyclesPerSecond = juce::MidiMessage::getMidiNoteInHertz(midiNoteNumber);
-        angleDelta = cyclesPerSecond / getSampleRate();
+        angleDelta = cyclesPerSecond / sr;
     }
+
+
 
     void stopNote(float, bool allowTailOff) override
     {
@@ -491,6 +495,21 @@ private:
     juce::TextButton metronomeBtn{ "CLICK" };
     int metroSampleCounter = 0;
     int metroBeepSamplesLeft = 0;
+    // --- SISTEMA DE TEMAS (CLARO / OSCURO / MIDNIGHT) ---
+    struct DawTheme {
+        juce::Colour bgMain;
+        juce::Colour bgBar;
+        juce::Colour bgCapsule;
+        juce::Colour bgPanel;
+        juce::Colour borderSubtle;
+        juce::Colour textPrimary;
+        juce::Colour accentPrimary;
+    };
+
+    DawTheme currentTheme;
+    juce::ComboBox themeSelector;
+    void applyTheme(int themeId);
+
     double metroPhase = 0.0;
     // Instrumento Virtual Nativo + Teclado en vivo
     juce::Synthesiser nativeSynth;

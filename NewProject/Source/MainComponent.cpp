@@ -50,6 +50,8 @@ MainComponent::MainComponent() : AudioAppComponent()
     masterVolumeSlider.setValue(0.8);
     masterVolumeSlider.setColour(juce::Slider::thumbColourId, juce::Colours::gold);
     masterVolumeSlider.setColour(juce::Slider::trackColourId, juce::Colours::white);
+    applyTheme(1);
+
 
     addAndMakeVisible(playButton);
     addAndMakeVisible(stopButton);
@@ -343,9 +345,8 @@ void MainComponent::newProject()
 
 juce::StringArray MainComponent::getMenuBarNames()
 {
-    return { "Archivo", "Canales", "Configuracion", "Ayuda" };
+    return { "Archivo", "Canales", "Configuracion", "Ayuda", "Temas" };
 }
-
 juce::PopupMenu MainComponent::getMenuForIndex(int topLevelMenuIndex, const juce::String&)
 {
     juce::PopupMenu menu;
@@ -379,6 +380,12 @@ juce::PopupMenu MainComponent::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addItem(31, "Licencia y Terminos de Uso (Dual)...");
 
     }
+    if (topLevelMenuIndex == 4)
+    {
+        menu.addItem(501, "Midnight Oscuro");
+        menu.addItem(502, "Daylight Claro");
+        menu.addItem(503, "Obsidian Ambar");
+    }
 
     return menu;
 }
@@ -390,6 +397,10 @@ void MainComponent::menuItemSelected(int menuItemID, int)
     case 1:  newProject(); break;
     case 2:  loadSessionFromFile(); break;
     case 3:  saveSessionToFile(); break;
+    case 501: applyTheme(1); break;
+    case 502: applyTheme(2); break;
+    case 503: applyTheme(3); break;
+
     case 4:  if (isRecordingMaster) stopMasterRecording(); else { recWavButton.setToggleState(true, juce::dontSendNotification); startMasterRecording(); } break;
     case 5:  juce::JUCEApplication::getInstance()->systemRequestedQuit(); break;
 #if ! JUCE_ANDROID && ! JUCE_IOS
@@ -614,6 +625,7 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
     juce::MidiBuffer incomingMidi;
     keyboardState.processNextMidiBuffer(incomingMidi, bufferToFill.startSample, bufferToFill.numSamples, true);
     nativeSynth.renderNextBlock(*bufferToFill.buffer, incomingMidi, bufferToFill.startSample, bufferToFill.numSamples);
+
     if (activeVstPlugin != nullptr)
         activeVstPlugin->processBlock(*bufferToFill.buffer, incomingMidi);
 
@@ -763,18 +775,66 @@ void MainComponent::releaseResources() { masterReverb.reset(); }
 
 
 
+void MainComponent::applyTheme(int themeId)
+{
+    if (themeId == 2) // Daylight Claro
+    {
+        currentTheme = {
+            juce::Colour(0xffeef1f5), juce::Colour(0xffe2e6ec), juce::Colour(0xffffffff),
+            juce::Colour(0xfff8fafc), juce::Colour(0xffcbd5e1), juce::Colour(0xff0f172a),
+            juce::Colour(0xff2563eb)
+        };
+    }
+    else if (themeId == 3) // Obsidian Ambar
+    {
+        currentTheme = {
+            juce::Colour(0xff100f0e), juce::Colour(0xff181614), juce::Colour(0xff24211e),
+            juce::Colour(0xff1c1a17), juce::Colour(0xff3d3730), juce::Colour(0xfff5f5f4),
+            juce::Colour(0xfff59e0b)
+        };
+    }
+    else // 1: Midnight Oscuro
+    {
+        currentTheme = {
+            juce::Colour(0xff101318), juce::Colour(0xff161a22), juce::Colour(0xff202632),
+            juce::Colour(0xff181c24), juce::Colour(0xff2e3748), juce::Colour(0xfff1f5f9),
+            juce::Colour(0xff00d2ff)
+        };
+    }
+
+    getLookAndFeel().setColour(juce::TextButton::buttonColourId, currentTheme.bgCapsule.brighter(0.08f));
+    getLookAndFeel().setColour(juce::TextButton::textColourOffId, currentTheme.textPrimary);
+    getLookAndFeel().setColour(juce::ComboBox::backgroundColourId, currentTheme.bgCapsule);
+    getLookAndFeel().setColour(juce::ComboBox::textColourId, currentTheme.textPrimary);
+    getLookAndFeel().setColour(juce::ComboBox::outlineColourId, currentTheme.borderSubtle);
+    getLookAndFeel().setColour(juce::Slider::textBoxTextColourId, currentTheme.textPrimary);
+    getLookAndFeel().setColour(juce::Slider::textBoxBackgroundColourId, currentTheme.bgMain);
+    getLookAndFeel().setColour(juce::Slider::textBoxOutlineColourId, currentTheme.borderSubtle);
+    repaint();
+}
+
 void MainComponent::paint(juce::Graphics& g)
 {
-    g.fillAll(juce::Colour(0xff141414));
+    g.fillAll(currentTheme.bgMain);
 
+    g.setColour(currentTheme.bgBar);
+    g.fillRect(0, 28, getWidth(), 52);
+    g.setColour(currentTheme.borderSubtle);
+    g.drawLine(0.0f, 80.0f, (float)getWidth(), 80.0f, 1.0f);
 
-g.setColour(juce::Colour(0xff1f1f1f));
-g.fillRect(0, 28, getWidth(), 50);
-g.setColour(juce::Colours::white.withAlpha(0.2f));
-g.drawLine(0, 78, (float)getWidth(), 78, 1.0f);
-// Pantalla de Osciloscopio en tiempo real (Barra superior extendida)
-int scopeX = 765;
-int scopeW = getWidth() - 785;
+    auto drawCapsule = [&](float x, float w)
+        {
+            g.setColour(currentTheme.bgCapsule);
+            g.fillRoundedRectangle(x, 33.0f, w, 40.0f, 6.0f);
+            g.setColour(currentTheme.borderSubtle);
+            g.drawRoundedRectangle(x, 33.0f, w, 40.0f, 6.0f, 1.0f);
+        };
+
+    drawCapsule(14.0f, 228.0f);  // Capsula 1: Transporte
+    drawCapsule(250.0f, 182.0f); // Capsula 2: Sincronia (BPM y CLICK)
+
+    int scopeX = 442;
+    int scopeW = getWidth() - scopeX - 18;
 
 if (scopeW > 80 && !scopeBuffer.empty())
 {
@@ -897,19 +957,26 @@ void MainComponent::resized()
     if (menuBar != nullptr)
         menuBar->setBounds(0, 0, getWidth(), menuH);
 
+    // Capsula 1: Transporte
     playButton.setBounds(20, menuH + 10, 62, 30);
     stopButton.setBounds(88, menuH + 10, 62, 30);
     recWavButton.setBounds(156, menuH + 10, 80, 30);
 
-    addAudioBtn.setBounds(255, menuH + 10, 85, 30);
-    addMidiBtn.setBounds(346, menuH + 10, 85, 30);
+    // Capsula 2: Sincronia
+    bpmSlider.setBounds(256, menuH + 10, 102, 30);
+    metronomeBtn.setBounds(364, menuH + 10, 62, 30);
 
-    saveBtn.setBounds(450, menuH + 10, 65, 30);
-    loadBtn.setBounds(521, menuH + 10, 65, 30);
-    bpmSlider.setBounds(600, menuH + 10, 100, 30);
-    metronomeBtn.setBounds(710, menuH + 10, 65, 30);
-    bpmSlider.setBounds(595, menuH + 10, 95, 30);
-    metronomeBtn.setBounds(696, menuH + 10, 58, 30);
+    // Ocultar botones redundantes (ya accesibles desde el menu superior)
+    addAudioBtn.setVisible(false);
+    addMidiBtn.setVisible(false);
+    saveBtn.setVisible(false);
+    loadBtn.setVisible(false);
+    themeSelector.setVisible(false);
+
+
+    // Selector de Tema a la derecha
+    themeSelector.setBounds(getWidth() - 178, menuH + 10, 165, 30);
+
 
 
 
