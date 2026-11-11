@@ -51,6 +51,13 @@ MainComponent::MainComponent() : AudioAppComponent()
     masterVolumeSlider.setColour(juce::Slider::thumbColourId, juce::Colours::gold);
     masterVolumeSlider.setColour(juce::Slider::trackColourId, juce::Colours::white);
     applyTheme(1);
+    // --- INICIALIZAR VOCES Y SONIDO DEL SINTETIZADOR ---
+    nativeSynth.clearVoices();
+    for (int i = 0; i < 8; ++i)
+        nativeSynth.addVoice(new MidawSynthVoice());
+
+    nativeSynth.clearSounds();
+    nativeSynth.addSound(new MidawSynthSound());
 
 
     addAndMakeVisible(playButton);
@@ -623,11 +630,19 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
 {
     bufferToFill.clearActiveBufferRegion();
     juce::MidiBuffer incomingMidi;
-    keyboardState.processNextMidiBuffer(incomingMidi, bufferToFill.startSample, bufferToFill.numSamples, true);
-    nativeSynth.renderNextBlock(*bufferToFill.buffer, incomingMidi, bufferToFill.startSample, bufferToFill.numSamples);
+    keyboardState.processNextMidiBuffer(incomingMidi, 0, bufferToFill.numSamples, true);
 
+    juce::AudioBuffer<float> activeSubBuffer(
+        bufferToFill.buffer->getArrayOfWritePointers(),
+        bufferToFill.buffer->getNumChannels(),
+        bufferToFill.startSample,
+        bufferToFill.numSamples
+    );
+    nativeSynth.renderNextBlock(activeSubBuffer, incomingMidi, 0, bufferToFill.numSamples);
     if (activeVstPlugin != nullptr)
         activeVstPlugin->processBlock(*bufferToFill.buffer, incomingMidi);
+
+        
 
 
 
