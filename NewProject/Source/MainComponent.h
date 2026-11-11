@@ -620,6 +620,21 @@ private:
     void sendMotorizedFaderFeedback(int faderIndex, float normalizedValue);
     void sendAllMotorizedFaders();
     bool processMotorizedSurfaceInput(const juce::MidiMessage& message);
+    // === MOTOR UNIVERSAL DE LUCES DMX POR MIDI (512 CANALES + 16 ESCENAS) ===
+    std::unique_ptr<juce::MidiOutput> dmxMidiOut;
+    juce::String dmxOutDeviceId;
+    int dmxMidiChannel = 16; // Canal MIDI dedicado por defecto para luces (Ch 16)
+    uint8_t dmxUniverse[512] = { 0 };
+    uint8_t dmxScenes[16][512] = { { 0 } };
+    int activeDmxScene = -1;
+    bool dmxBlackout = false;
+
+    void openDmxOutput(const juce::String& deviceIdentifier);
+    void setDmxChannelValue(int dmxChannel1To512, uint8_t value0To255);
+    void saveDmxScene(int sceneIndex);
+    void recallDmxScene(int sceneIndex);
+    void triggerDmxBlackout(bool enableBlackout);
+    bool processDmxMidiTrigger(const juce::MidiMessage& message);
 
 }
 ;

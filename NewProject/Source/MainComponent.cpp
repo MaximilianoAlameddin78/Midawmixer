@@ -559,6 +559,12 @@ void MainComponent::handleIncomingMidiMessage(juce::MidiInput* source, const juc
 {
     if (source == nullptr) return;
     juce::String sourceId = source->getIdentifier();
+    if (motorizedMidiOut != nullptr && processMotorizedSurfaceInput(message))
+        return;
+
+    if (processDmxMidiTrigger(message))
+        return;
+
     if (message.isNoteOn() && message.getVelocity() > 0)
     {
         int note = message.getNoteNumber();
@@ -1338,6 +1344,128 @@ bool MainComponent::processMotorizedSurfaceInput(const juce::MidiMessage& messag
             });
 
         return true;
+    }
+
+    return false;
+}
+// ==============================================================================
+// MOTOR UNIVERSAL DE LUCES DMX POR MIDI (512 CANALES + 16 ESCENAS + BLACKOUT)
+// ==============================================================================
+void MainComponent::openDmxOutput(const juce::String& deviceIdentifier)
+{
+    dmxMidiOut.reset();
+    dmxOutDeviceId = deviceIdentifier;
+
+    if (deviceIdentifier.isNotEmpty())
+    {
+        dmxMidiOut = juce::MidiOutput::openDevice(deviceIdentifier);
+        if (dmxMidiOut != nullptr && activeDmxScene >= 0)
+            recallDmxScene(activeDmxScene);
+    }
+}
+
+void MainComponent::setDmxChannelValue(int dmxChannel1To512, uint8_t value0To255)
+{
+    if (dmxChannel1To512 < 1 || dmxChannel1To512 > 512)
+        return;
+
+    int idx = dmxChannel1To512 - 1;
+    dmxUniverse[idx] = value0To255;
+
+    if (dmxMidiOut == nullptr)
+        return;
+
+    uint8_t effectiveVal = dmxBlackout ? 0 : value0To255;
+    int midiVal7 = juce::jlimit(0, 127, (int)std::round(effectiveVal * (127.0 / 255.0)));
+
+    // Mapeo Universal MIDI-to-DMX:
+    // Canales DMX 1..119 -> CC 1..119 en dmxMidiChannel (por defecto Ch 16)
+    // Canales DMX 120..512 -> Notas MIDI (NoteNumber = dmx % 128, Velocity = midiVal7) en canales adyacentes
+    if (dmxChannel1To512 <= 119)
+    {
+        auto msg = juce::MidiMessage::controllerEvent(dmxMidiChannel, dmxChannel1To512, midiVal7);
+        dmxMidiOut->sendMessageNow(msg);
+    }
+    else
+    {
+        int noteNum = idx % 128;
+        int bankOffset = (idx / 128);
+        int targetCh = juce::jlimit(1, 16, dmxMidiChannel - bankOffset);
+        auto msg = juce::MidiMessage::noteOn(targetCh, noteNum, (juce::uint8)midiVal7);
+        dmxMidiOut->sendMessageNow(msg);
+    }
+}
+
+void MainComponent::saveDmxScene(int sceneIndex)
+{
+    if (sceneIndex < 0 || sceneIndex >= 16)
+        return;
+
+    for (int ch = 0; ch < 512; ++ch)
+        dmxScenes[sceneIndex][ch] = dmxUniverse[ch];
+
+    activeDmxScene = sceneIndex;
+}
+
+void MainComponent::recallDmxScene(int sceneIndex)
+{
+    if (sceneIndex < 0 || sceneIndex >= 16)
+        return;
+
+    activeDmxScene = sceneIndex;
+    for (int ch = 0; ch < 512; ++ch)
+    {
+        uint8_t val = dmxScenes[sceneIndex][ch];
+        if (val != dmxUniverse[ch] || dmxBlackout)
+            setDmxChannelValue(ch + 1, val);
+    }
+}
+
+void MainComponent::triggerDmxBlackout(bool enableBlackout)
+{
+    dmxBlackout = enableBlackout;
+    if (dmxMidiOut == nullptr)
+        return;
+
+    for (int ch = 0; ch < 512; ++ch)
+    {
+        if (dmxUniverse[ch] > 0)
+            setDmxChannelValue(ch + 1, dmxUniverse[ch]);
+    }
+}
+
+bool MainComponent::processDmxMidiTrigger(const juce::MidiMessage& message)
+{
+    // Escucha en el canal MIDI dedicado a luces (por defecto Ch 16)
+    if (message.getChannel() != dmxMidiChannel)
+        return false;
+
+    // 1. Disparador de Escenas DMX por Notas/Pads (Notas 36..51 = Escenas 1..16, Nota 52 = Blackout)
+    if (message.isNoteOn() && message.getVelocity() > 0)
+    {
+        int note = message.getNoteNumber();
+        if (note >= 36 && note <= 51)
+        {
+            recallDmxScene(note - 36);
+            return true;
+        }
+        if (note == 52)
+        {
+            triggerDmxBlackout(!dmxBlackout);
+            return true;
+        }
+    }
+
+    // 2. Control directo de canales DMX 1..119 via faders/knobs MIDI en Ch 16
+    if (message.isController())
+    {
+        int cc = message.getControllerNumber();
+        if (cc >= 1 && cc <= 119)
+        {
+            uint8_t dmxVal = (uint8_t)juce::jlimit(0, 255, (int)std::round(message.getControllerValue() * (255.0 / 127.0)));
+            setDmxChannelValue(cc, dmxVal);
+            return true;
+        }
     }
 
     return false;
