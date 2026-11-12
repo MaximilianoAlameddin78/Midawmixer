@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<JUCERPROJECT id="plDFR3" name="NewProject" projectType="guiapp" useAppConfig="0"
-              addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1">
-  <MAINGROUP id="NlmNLn" name="NewProject">
+<JUCERPROJECT id="plDFR3" name="Midawmixer" projectType="guiapp" useAppConfig="0"
+              addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1" version="0.1.0"
+              companyName="Maximiliano Alameddin">
+  <MAINGROUP id="NlmNLn" name="Midawmixer">
     <GROUP id="{EE63A602-C004-A246-BF99-369D814FE0B4}" name="Source">
       <FILE id="PqzA0c" name="Main.cpp" compile="1" resource="0" file="Source/Main.cpp"/>
       <FILE id="OM2ehn" name="MainComponent.h" compile="0" resource="0" file="Source/MainComponent.h"/>

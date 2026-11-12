@@ -568,7 +568,8 @@ void MainComponent::handleIncomingMidiMessage(juce::MidiInput* source, const juc
     for (int i = 0; i < midiChannels.size(); ++i)
     {
         auto* ch = midiChannels[i];
-        if (ch->assignedInId == sourceId)
+        if (ch->assignedInId == sourceId || ch->assignedInId == "ALL" || (ch->assignedInId.isEmpty() && ch->instSelector.getSelectedId() > 1))
+
         {
             ch->pushIncomingMidi(message);
             if (ch->midiOut != nullptr)
