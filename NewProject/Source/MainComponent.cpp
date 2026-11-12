@@ -655,6 +655,15 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
         incomingMidi.swapWith(pendingControlMidi);
     }
     keyboardState.processNextMidiBuffer(incomingMidi, 0, bufferToFill.numSamples, true);
+    for (const auto metadata : incomingMidi)
+    {
+        auto msg = metadata.getMessage();
+        for (int i = 0; i < midiChannels.size(); ++i)
+        {
+            if (midiChannels[i]->instSelector.getSelectedId() > 1 || msg.isAllNotesOff() || msg.isAllSoundOff())
+                midiChannels[i]->pushIncomingMidi(msg);
+        }
+    }
 
 
     juce::AudioBuffer<float> activeSubBuffer(
