@@ -123,19 +123,39 @@ MainComponent::MainComponent() : AudioAppComponent()
     browserSearchBox.setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xff181818));
     browserSearchBox.onTextChange = [this] { rebuildBrowserList(); };
 
-    auto setupCatBtn = [this](juce::TextButton& b, int catId)
+    auto selectBrowserCat = [this](int cat)
         {
-            addAndMakeVisible(b);
-            b.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff232323));
-            b.onClick = [this, catId]
-                {
-                    browserCategory = catId;
-                    rebuildBrowserList();
-                };
+            browserCategory = cat;
+            auto activeCol = juce::Colours::deepskyblue;
+            auto normalCol = juce::Colour(0xff232323);
+            catAllBtn.setColour(juce::TextButton::buttonColourId, cat == 0 ? activeCol : normalCol);
+            catPianoBtn.setColour(juce::TextButton::buttonColourId, cat == 1 ? activeCol : normalCol);
+            catSynthBtn.setColour(juce::TextButton::buttonColourId, cat == 2 ? activeCol : normalCol);
+            catDrumBtn.setColour(juce::TextButton::buttonColourId, cat == 3 ? activeCol : normalCol);
+            catVstBtn.setColour(juce::TextButton::buttonColourId, cat == 4 ? activeCol : normalCol);
+            rebuildBrowserList();
         };
-    setupCatBtn(catAllBtn, 0);
-    setupCatBtn(catNativeBtn, 1);
-    setupCatBtn(catPluginsBtn, 2);
+
+    for (auto* b : { &catAllBtn, &catPianoBtn, &catSynthBtn, &catDrumBtn, &catVstBtn })
+        addAndMakeVisible(b);
+
+    catAllBtn.onClick = [selectBrowserCat]() { selectBrowserCat(0); };
+    catPianoBtn.onClick = [selectBrowserCat]() { selectBrowserCat(1); };
+    catSynthBtn.onClick = [selectBrowserCat]() { selectBrowserCat(2); };
+    catDrumBtn.onClick = [selectBrowserCat]() { selectBrowserCat(3); };
+    catVstBtn.onClick = [selectBrowserCat]() { selectBrowserCat(4); };
+    selectBrowserCat(0);
+    addAndMakeVisible(arrangementTimeline);
+    addAndMakeVisible(timelineToggleBtn);
+    timelineToggleBtn.setColour(juce::TextButton::buttonColourId, juce::Colours::deepskyblue);
+    timelineToggleBtn.onClick = [this]()
+        {
+            showTimelineView = !showTimelineView;
+            arrangementTimeline.setVisible(showTimelineView);
+            timelineToggleBtn.setColour(juce::TextButton::buttonColourId, showTimelineView ? juce::Colours::deepskyblue : juce::Colour(0xff232323));
+            resized();
+        };
+
 
     addAndMakeVisible(scanVstBtn);
     scanVstBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2b4c3f));
@@ -214,6 +234,10 @@ void MainComponent::startMasterRecording()
     recordedAudioBuffer.setSize(2, 48000 * 60 * 3);
     recordedAudioBuffer.clear();
     recordedSamplesCount = 0;
+    double sr = deviceManager.getCurrentAudioDevice() != nullptr ? deviceManager.getCurrentAudioDevice()->getCurrentSampleRate() : 48000.0;
+    for (auto* ch : audioChannels)
+        if (ch->recButton.getToggleState())
+            ch->startTrackRecording(sr);
 
     recordedMidiSeq.clear();
     masterRecStartTime = juce::Time::getMillisecondCounterHiRes() * 0.001;
@@ -242,6 +266,25 @@ void MainComponent::stopMasterRecording()
                 fileStream.release();
                 writer->writeFromAudioSampleBuffer(recordedAudioBuffer, 0, recordedSamplesCount);
             }
+        }
+    }
+    for (int a = 0; a < audioChannels.size(); ++a)
+    {
+        auto* ch = audioChannels[a];
+        if (ch->trackRecordedSamples > 0)
+        {
+            auto trackWav = docsDir.getNonexistentChildFile("Midawmixer_Audio_Track_" + juce::String(a + 1) + "_", ".wav");
+            if (auto fs = std::unique_ptr<juce::FileOutputStream>(trackWav.createOutputStream()))
+            {
+                juce::WavAudioFormat fmt;
+                double sr = deviceManager.getCurrentAudioDevice() != nullptr ? deviceManager.getCurrentAudioDevice()->getCurrentSampleRate() : 48000.0;
+                if (auto w = std::unique_ptr<juce::AudioFormatWriter>(fmt.createWriterFor(fs.get(), sr, 1, 24, {}, 0)))
+                {
+                    fs.release();
+                    w->writeFromAudioSampleBuffer(ch->trackRecBuffer, 0, ch->trackRecordedSamples);
+                }
+            }
+            ch->trackRecordedSamples = 0;
         }
     }
 
@@ -602,7 +645,7 @@ void MainComponent::triggerInternalSynths(const juce::MidiMessage& message, floa
                 m->hasActivity = true;
                 m->pushIncomingMidi(message);
 
-                if (isRecordingMaster && message.isNoteOnOrOff())
+                if (isRecordingMaster && m->recButton.getToggleState() && message.isNoteOnOrOff())
                 {
                     double ticks = ((juce::Time::getMillisecondCounterHiRes() * 0.001) - masterRecStartTime) * 1920.0;
                     recordedMidiSeq.addEvent(message, ticks);
@@ -612,6 +655,42 @@ void MainComponent::triggerInternalSynths(const juce::MidiMessage& message, floa
                 {
                     double relTime = (juce::Time::getMillisecondCounterHiRes() * 0.001) - m->recordStartTime;
                     m->recordedEvents.push_back({ relTime, message });
+                    if ((m->isRecording || (isRecordingMaster && m->recButton.getToggleState())) && message.isNoteOnOrOff())
+
+                    {
+                        int tlTrack = audioChannels.size() + i;
+                        TimelineClip* activeMidiClip = nullptr;
+                        for (int c = (int)arrangementTimeline.clips.size() - 1; c >= 0; --c)
+                        {
+                            if (arrangementTimeline.clips[c].isMidi && arrangementTimeline.clips[c].trackIndex == tlTrack
+                                && std::abs((arrangementTimeline.clips[c].startSec + arrangementTimeline.clips[c].durationSec) - arrangementTimeline.playheadSec) < 2.0)
+                            {
+                                activeMidiClip = &arrangementTimeline.clips[c];
+                                break;
+                            }
+                        }
+                        if (activeMidiClip == nullptr)
+                        {
+                            TimelineClip nc;
+                            nc.trackIndex = tlTrack;
+                            nc.isMidi = true;
+                            nc.name = m->assignedInstrumentName;
+                            nc.colour = juce::Colours::deepskyblue;
+                            nc.startSec = arrangementTimeline.playheadSec;
+                            nc.durationSec = 0.5;
+                            nc.maxDurationSec = 0.5;
+                            arrangementTimeline.clips.push_back(nc);
+                            activeMidiClip = &arrangementTimeline.clips.back();
+                        }
+                        if (message.isNoteOn())
+                        {
+                            double noteOffset = juce::jmax(0.0, arrangementTimeline.playheadSec - activeMidiClip->startSec);
+                            activeMidiClip->midiNotes.push_back({ noteOffset, 0.25, message.getNoteNumber() });
+                            activeMidiClip->durationSec = juce::jmax(activeMidiClip->durationSec, noteOffset + 0.35);
+                            activeMidiClip->maxDurationSec = activeMidiClip->durationSec;
+                        }
+                    }
+
                 }
 
                 if (m->midiOut != nullptr)
@@ -648,6 +727,31 @@ void MainComponent::timerCallback()
     }
 
     repaint();
+    // Sincronizar pistas, BPM y cabezal de reproduccion del Timeline Multipista
+    arrangementTimeline.bpm = bpmSlider.getValue();
+    juce::StringArray tlNames;
+    std::vector<bool> tlMidi;
+    for (int i = 0; i < audioChannels.size(); ++i)
+    {
+        tlNames.add("AUDIO " + juce::String(i + 1));
+        tlMidi.push_back(false);
+    }
+    for (int i = 0; i < midiChannels.size(); ++i)
+    {
+        tlNames.add("MIDI " + juce::String(i + 1));
+        tlMidi.push_back(true);
+    }
+    arrangementTimeline.trackNames = tlNames;
+    arrangementTimeline.trackIsMidi = tlMidi;
+
+    if (isPlaying)
+        arrangementTimeline.playheadSec += 0.033; // ~30 fps
+    else if (arrangementTimeline.playheadSec > 0.0 && !isPlaying && metroSampleCounter == 0)
+        arrangementTimeline.playheadSec = 0.0;
+
+    if (showTimelineView)
+        arrangementTimeline.repaint();
+
 }
 
 void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill)
@@ -737,25 +841,50 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
                     dryLeft += w * vol * (1.0f - pan);
 
                     dryRight += w * vol * pan;
+                    if (isRecordingMaster && ch->recButton.getToggleState())
+                        ch->appendTrackSample(w * vol);
                 }
+
             }
         }
 
         float clickSample = 0.0f;
+        
         if (isPlaying && metronomeBtn.getToggleState())
         {
-            int samplesPerBeat = (int)((60.0 / bpmSlider.getValue()) * blindRate);
+            double bpm = juce::jlimit(30.0, 300.0, bpmSlider.getValue());
+            int samplesPerBeat = juce::jmax(1, (int)((60.0 / bpm) * blindRate));
 
+            if (metroSampleCounter == 0)
             {
-                clickSample = (float)std::sin(metroPhase * 2.0 * 3.14159265359) * 0.25f;
-                metroPhase += 1000.0 / blindRate;
+                metroBeepSamplesLeft = (int)(0.025 * blindRate); // Pulso corto de 25 ms
+                metroPhase = 0.0;
+            }
+
+            if (metroBeepSamplesLeft > 0)
+            {
+                // Acento agudo (1200 Hz) en el tiempo 1 de cada compas de 4/4, y 800 Hz en tiempos 2, 3 y 4
+                double freq = (metroBeatIndex % 4 == 0) ? 1200.0 : 800.0;
+                float env = (float)metroBeepSamplesLeft / (float)juce::jmax(1, (int)(0.025 * blindRate));
+                clickSample = (float)std::sin(metroPhase * 2.0 * 3.14159265359) * 0.25f * env;
+                metroPhase += freq / blindRate;
                 --metroBeepSamplesLeft;
+            }
+
+            ++metroSampleCounter;
+            if (metroSampleCounter >= samplesPerBeat)
+            {
+                metroSampleCounter = 0;
+                ++metroBeatIndex;
             }
         }
         else
         {
             metroSampleCounter = 0;
+            metroBeepSamplesLeft = 0;
+            metroBeatIndex = 0;
         }
+
         float delayedLeft = 0.0f;
         float delayedRight = 0.0f;
 
@@ -809,6 +938,48 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
             recordedSamplesCount += samplesToCopy;
         }
     }
+    if (isRecordingMaster)
+
+
+        float peak = std::max(maxLeft, maxRight);
+    float peak = std::max(maxLeft, maxRight);
+
+        for (int a = 0; a < audioChannels.size(); ++a)
+        {
+            if (audioChannels[a]->recButton.getToggleState())
+
+
+            {
+                TimelineClip* activeAudClip = nullptr;
+                for (int c = (int)arrangementTimeline.clips.size() - 1; c >= 0; --c)
+                {
+                    if (!arrangementTimeline.clips[c].isMidi && arrangementTimeline.clips[c].trackIndex == a
+                        && std::abs((arrangementTimeline.clips[c].startSec + arrangementTimeline.clips[c].durationSec) - arrangementTimeline.playheadSec) < 0.5)
+                    {
+                        activeAudClip = &arrangementTimeline.clips[c];
+                        break;
+                    }
+                }
+                if (activeAudClip == nullptr)
+                {
+                    TimelineClip ac;
+                    ac.trackIndex = a;
+                    ac.isMidi = false;
+                    ac.name = "Audio Rec " + juce::String(a + 1);
+                    ac.colour = juce::Colours::aquamarine;
+                    ac.startSec = arrangementTimeline.playheadSec;
+                    ac.durationSec = 0.1;
+                    ac.maxDurationSec = 0.1;
+                    arrangementTimeline.clips.push_back(ac);
+                    activeAudClip = &arrangementTimeline.clips.back();
+                }
+                activeAudClip->waveformPeaks.push_back(peak);
+                double blockSec = (double)bufferToFill.numSamples / juce::jmax(1.0, blindRate);
+                activeAudClip->durationSec += blockSec;
+                activeAudClip->maxDurationSec = activeAudClip->durationSec;
+            }
+        }
+    
 
     currentLevelLeft = std::max(maxLeft, currentLevelLeft * 0.85f);
     currentLevelRight = std::max(maxRight, currentLevelRight * 0.85f);
@@ -1003,6 +1174,7 @@ void MainComponent::resized()
     int menuH = 28;
     if (menuBar != nullptr)
         menuBar->setBounds(0, 0, getWidth(), menuH);
+    timelineToggleBtn.setBounds(434, menuH + 10, 82, 30);
 
     // Capsula 1: Transporte
     playButton.setBounds(20, menuH + 10, 62, 30);
@@ -1030,16 +1202,29 @@ void MainComponent::resized()
     int chY = menuH + 65;
     int keyH = 68;
     int chH = getHeight() - (menuH + 80) - keyH;
-
     int brX = 15, brW = 250;
     browserSearchBox.setBounds(brX + 6, chY + 26, brW - 12, 24);
-    catAllBtn.setBounds(brX + 6, chY + 54, 70, 24);
-    catNativeBtn.setBounds(brX + 6, chY + 82, 70, 24);
-    catPluginsBtn.setBounds(brX + 6, chY + 110, 70, 24);
-    scanVstBtn.setBounds(brX + 6, chY + 142, 70, 26);
-    openGuiBtn.setBounds(brX + 6, chY + 174, 70, 24);
-    unloadVstBtn.setBounds(brX + 6, chY + 202, 70, 24);
+    int centerW = getWidth() - 535;
+    if (showTimelineView)
+    {
+        int tlH = juce::jmax(130, (int)(chH * 0.44f));
+        arrangementTimeline.setBounds(275, chY, centerW, tlH);
+        channelViewport.setBounds(275, chY + tlH + 6, centerW, chH - tlH + 9);
+    }
+    else
+    {
+        channelViewport.setBounds(275, chY, centerW, chH + 15);
+    }
+
+    catPianoBtn.setBounds(brX + 6, chY + 78, 70, 22);
+    catSynthBtn.setBounds(brX + 6, chY + 102, 70, 22);
+    catDrumBtn.setBounds(brX + 6, chY + 126, 70, 22);
+    catVstBtn.setBounds(brX + 6, chY + 150, 70, 22);
+    scanVstBtn.setBounds(brX + 6, chY + 180, 70, 24);
+    openGuiBtn.setBounds(brX + 6, chY + 208, 70, 22);
+    unloadVstBtn.setBounds(brX + 6, chY + 234, 70, 22);
     browserListBox.setBounds(brX + 80, chY + 54, brW - 86, chH - 60);
+
 
     channelViewport.setBounds(275, chY, getWidth() - 535, chH + 15);
     midiKeyboard.setBounds(15, getHeight() - keyH - 5, getWidth() - 30, keyH);

@@ -66,6 +66,9 @@ public:
         soloButton.setClickingTogglesState(true);
         soloButton.setColour(juce::TextButton::buttonOnColourId, juce::Colours::gold);
         soloButton.setColour(juce::TextButton::textColourOnId, juce::Colours::black);
+        addAndMakeVisible(recButton);
+        recButton.setClickingTogglesState(true);
+        recButton.setColour(juce::TextButton::buttonOnColourId, juce::Colours::red);
 
         addAndMakeVisible(volumeSlider);
         volumeSlider.setSliderStyle(juce::Slider::LinearVertical);
@@ -144,8 +147,10 @@ public:
         eqMidSlider.setBounds(34, 125, 28, 32);
         eqLowSlider.setBounds(64, 125, 28, 32);
         panSlider.setBounds(27, 173, 40, 40);
-        muteButton.setBounds(10, 218, 35, 22);
-        soloButton.setBounds(50, 218, 35, 22);
+        muteButton.setBounds(6, 218, 26, 22);
+        soloButton.setBounds(34, 218, 26, 22);
+        recButton.setBounds(62, 218, 26, 22);
+
         volumeSlider.setBounds(15, 258, w - 30, h - 282);
     }
 
@@ -162,6 +167,25 @@ public:
     int chIndex;
     juce::Slider inputGainSlider, panSlider, volumeSlider;
     juce::Slider& freqSlider = inputGainSlider;
+    juce::TextButton recButton{ "R" };
+    juce::AudioBuffer<float> trackRecBuffer;
+    int trackRecordedSamples = 0;
+
+    void startTrackRecording(double sampleRate)
+    {
+        trackRecordedSamples = 0;
+        trackRecBuffer.setSize(1, (int)(sampleRate * 600.0)); // Hasta 10 minutos aislados por pista
+        trackRecBuffer.clear();
+    }
+
+    void appendTrackSample(float sample)
+    {
+        if (!recButton.getToggleState() || trackRecBuffer.getNumSamples() == 0)
+            return;
+        if (trackRecordedSamples < trackRecBuffer.getNumSamples())
+            trackRecBuffer.setSample(0, trackRecordedSamples++, sample);
+    }
+
     juce::Slider eqLowSlider, eqMidSlider, eqHighSlider;
     juce::IIRFilter lowFilter, midFilter, highFilter;
     juce::TextButton muteButton{ "M" }, soloButton{ "S" };
@@ -713,6 +737,238 @@ public:
         setVisible(false);
     }
 };
+struct TimelineClip
+{
+    int trackIndex = 0;          // 0..N-1 (Audio primero, luego MIDI)
+    bool isMidi = false;
+    juce::String name;
+    juce::Colour colour = juce::Colours::deepskyblue;
+    double startSec = 0.0;       // Posicion en el timeline
+    double durationSec = 4.0;    // Duracion visible actual
+    double sourceOffsetSec = 0.0;// Recorte desde el inicio
+    double maxDurationSec = 4.0; // Duracion total grabada
+    std::vector<float> waveformPeaks; // Picos de onda (0.0 .. 1.0) para Audio
+    struct NoteVisual { double startRel; double dur; int note; };
+    std::vector<NoteVisual> midiNotes; // Notas visuales para MIDI
+};
+
+class ArrangementTimeline : public juce::Component
+{
+public:
+    std::vector<TimelineClip> clips;
+    juce::StringArray trackNames;
+    std::vector<bool> trackIsMidi;
+    double playheadSec = 0.0;
+    double pixelsPerSecond = 45.0;
+    double bpm = 120.0;
+
+    void paint(juce::Graphics& g) override
+    {
+        int w = getWidth();
+        int h = getHeight();
+        g.fillAll(juce::Colour(0xff12171d));
+        g.setColour(juce::Colours::deepskyblue.withAlpha(0.6f));
+        g.drawRect(0, 0, w, h, 1);
+
+        int headerW = 92;
+        int rulerH = 22;
+
+        // Regla superior de compases/tiempo
+        g.setColour(juce::Colour(0xff1b242e));
+        g.fillRect(0, 0, w, rulerH);
+        g.setColour(juce::Colours::lightgrey);
+        g.setFont(10.0f);
+        g.drawText("TIMELINE", 6, 0, headerW - 8, rulerH, juce::Justification::centredLeft);
+
+        double secPerBar = (60.0 / juce::jmax(30.0, bpm)) * 4.0;
+        for (int bar = 0; bar < 64; ++bar)
+        {
+            int x = headerW + (int)(bar * secPerBar * pixelsPerSecond);
+            if (x > w) break;
+            g.setColour(juce::Colours::white.withAlpha(0.25f));
+            g.drawVerticalLine(x, 0.0f, (float)h);
+            g.setColour(juce::Colours::silver);
+            g.drawText(juce::String(bar + 1), x + 3, 2, 28, rulerH - 4, juce::Justification::centredLeft);
+        }
+
+        int numTracks = juce::jmax(1, trackNames.size());
+        int trackH = juce::jlimit(26, 54, (h - rulerH) / numTracks);
+
+        // Cabeceras y carriles de pistas
+        for (int t = 0; t < trackNames.size(); ++t)
+        {
+            int y = rulerH + t * trackH;
+            if (y >= h) break;
+
+            g.setColour(t % 2 == 0 ? juce::Colour(0xff161d24) : juce::Colour(0xff1a222b));
+            g.fillRect(headerW, y, w - headerW, trackH);
+            g.setColour(juce::Colours::white.withAlpha(0.08f));
+            g.drawHorizontalLine(y + trackH - 1, 0.0f, (float)w);
+
+            g.setColour(trackIsMidi[t] ? juce::Colour(0xff183142) : juce::Colour(0xff1d2b36));
+            g.fillRect(1, y + 1, headerW - 2, trackH - 2);
+            g.setColour(trackIsMidi[t] ? juce::Colours::lightskyblue : juce::Colours::aquamarine);
+            g.setFont(juce::FontOptions(10.5f, juce::Font::bold));
+            g.drawText(trackNames[t], 6, y, headerW - 10, trackH, juce::Justification::centredLeft);
+        }
+
+        // Dibujar cada clip con su Forma de Onda (Audio) o Notas (MIDI)
+        for (int i = 0; i < (int)clips.size(); ++i)
+        {
+            const auto& c = clips[i];
+            if (c.trackIndex < 0 || c.trackIndex >= trackNames.size()) continue;
+
+            int y = rulerH + c.trackIndex * trackH + 2;
+            int ch = trackH - 4;
+            int x = headerW + (int)(c.startSec * pixelsPerSecond);
+            int cw = juce::jmax(8, (int)(c.durationSec * pixelsPerSecond));
+
+            g.setColour(c.colour.withAlpha(0.32f));
+            g.fillRoundedRectangle((float)x, (float)y, (float)cw, (float)ch, 4.0f);
+            g.setColour(i == selectedClipIndex ? juce::Colours::gold : c.colour);
+            g.drawRoundedRectangle((float)x, (float)y, (float)cw, (float)ch, 4.0f, i == selectedClipIndex ? 1.8f : 1.1f);
+
+            // Tiradores visuales de recorte en ambos bordes
+            g.setColour(juce::Colours::white.withAlpha(0.65f));
+            g.fillRect(x + 1, y + 4, 2, ch - 8);
+            g.fillRect(x + cw - 3, y + 4, 2, ch - 8);
+
+            g.saveState();
+            g.reduceClipRegion(x + 2, y + 1, juce::jmax(1, cw - 4), juce::jmax(1, ch - 2));
+
+            if (!c.isMidi && !c.waveformPeaks.empty() && c.maxDurationSec > 0.0)
+            {
+                // Forma de onda real respetando el recorte (sourceOffsetSec .. sourceOffsetSec + durationSec)
+                g.setColour(juce::Colours::aquamarine.withAlpha(0.9f));
+                float midY = y + ch * 0.5f;
+                for (int px = 0; px < cw; ++px)
+                {
+                    double tRel = c.sourceOffsetSec + ((double)px / pixelsPerSecond);
+                    int peakIdx = (int)((tRel / c.maxDurationSec) * (double)c.waveformPeaks.size());
+                    if (peakIdx >= 0 && peakIdx < (int)c.waveformPeaks.size())
+                    {
+                        float amp = juce::jlimit(0.05f, 1.0f, c.waveformPeaks[peakIdx]) * (ch * 0.44f);
+                        g.drawVerticalLine(x + px, midY - amp, midY + amp);
+                    }
+                }
+            }
+            else if (c.isMidi && !c.midiNotes.empty())
+            {
+                // Mini Piano Roll con notas MIDI respetando el recorte
+                g.setColour(juce::Colours::gold.withAlpha(0.92f));
+                for (const auto& n : c.midiNotes)
+                {
+                    double nStart = n.startRel - c.sourceOffsetSec;
+                    if (nStart + n.dur < 0.0 || nStart > c.durationSec) continue;
+                    int nx = x + (int)(nStart * pixelsPerSecond);
+                    int nw = juce::jmax(3, (int)(n.dur * pixelsPerSecond));
+                    float normPitch = juce::jlimit(0.0f, 1.0f, (n.note - 36) / 48.0f);
+                    int ny = y + ch - 4 - (int)(normPitch * (ch - 8));
+                    g.fillRect(nx, ny, nw, 3);
+                }
+            }
+
+            g.setColour(juce::Colours::white);
+            g.setFont(9.5f);
+            g.drawText(c.name, x + 5, y + 1, cw - 8, 12, juce::Justification::centredLeft);
+            g.restoreState();
+        }
+
+        // Cabezal de reproduccion (Playhead)
+        int phX = headerW + (int)(playheadSec * pixelsPerSecond);
+        if (phX >= headerW && phX <= w)
+        {
+            g.setColour(juce::Colours::orangered);
+            g.drawVerticalLine(phX, 0.0f, (float)h);
+        }
+    }
+
+    void mouseMove(const juce::MouseEvent& e) override
+    {
+        int hitClip = -1, edge = 0;
+        hitTestClipEdge(e.x, e.y, hitClip, edge);
+        setMouseCursor(edge != 0 ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::NormalCursor);
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        int hitClip = -1, edge = 0;
+        hitTestClipEdge(e.x, e.y, hitClip, edge);
+        selectedClipIndex = hitClip;
+        dragClipIndex = hitClip;
+        dragEdgeMode = edge; // -1 = borde izq, 1 = borde der, 0 = mover clip
+        dragStartX = e.x;
+        if (dragClipIndex >= 0)
+            dragInitialClip = clips[dragClipIndex];
+        repaint();
+    }
+
+    void mouseDrag(const juce::MouseEvent& e) override
+    {
+        if (dragClipIndex < 0 || dragClipIndex >= (int)clips.size()) return;
+        double deltaSec = (e.x - dragStartX) / pixelsPerSecond;
+        auto& c = clips[dragClipIndex];
+
+        if (dragEdgeMode == -1) // Recorte por borde izquierdo
+        {
+            double maxTrim = dragInitialClip.durationSec - 0.15;
+            double minTrim = -dragInitialClip.sourceOffsetSec;
+            double trim = juce::jlimit(minTrim, maxTrim, deltaSec);
+            c.startSec = dragInitialClip.startSec + trim;
+            c.sourceOffsetSec = dragInitialClip.sourceOffsetSec + trim;
+            c.durationSec = dragInitialClip.durationSec - trim;
+        }
+        else if (dragEdgeMode == 1) // Recorte por borde derecho
+        {
+            double maxDur = dragInitialClip.maxDurationSec - dragInitialClip.sourceOffsetSec;
+            c.durationSec = juce::jlimit(0.15, juce::jmax(0.15, maxDur), dragInitialClip.durationSec + deltaSec);
+        }
+        else // Mover clip en el tiempo
+        {
+            c.startSec = juce::jmax(0.0, dragInitialClip.startSec + deltaSec);
+        }
+        repaint();
+    }
+
+    void mouseUp(const juce::MouseEvent&) override
+    {
+        dragClipIndex = -1;
+        dragEdgeMode = 0;
+    }
+
+private:
+    void hitTestClipEdge(int mx, int my, int& outClip, int& outEdge)
+    {
+        outClip = -1; outEdge = 0;
+        int headerW = 92, rulerH = 22;
+        int numTracks = juce::jmax(1, trackNames.size());
+        int trackH = juce::jlimit(26, 54, (getHeight() - rulerH) / numTracks);
+
+        for (int i = (int)clips.size() - 1; i >= 0; --i)
+        {
+            const auto& c = clips[i];
+            int y = rulerH + c.trackIndex * trackH + 2;
+            int ch = trackH - 4;
+            int x = headerW + (int)(c.startSec * pixelsPerSecond);
+            int cw = juce::jmax(8, (int)(c.durationSec * pixelsPerSecond));
+
+            if (mx >= x - 4 && mx <= x + cw + 4 && my >= y && my <= y + ch)
+            {
+                outClip = i;
+                if (std::abs(mx - x) <= 6) outEdge = -1;
+                else if (std::abs(mx - (x + cw)) <= 6) outEdge = 1;
+                else outEdge = 0;
+                return;
+            }
+        }
+    }
+
+    int selectedClipIndex = -1;
+    int dragClipIndex = -1;
+    int dragEdgeMode = 0;
+    int dragStartX = 0;
+    TimelineClip dragInitialClip;
+};
 
 class MainComponent : public juce::AudioAppComponent,
     public juce::Timer,
@@ -769,6 +1025,8 @@ private:
     juce::Slider bpmSlider;
     juce::TextButton metronomeBtn{ "CLICK" };
     int metroSampleCounter = 0;
+    int metroBeatIndex = 0;
+
     int metroBeepSamplesLeft = 0;
     // --- SISTEMA DE TEMAS (CLARO / OSCURO / MIDNIGHT) ---
     struct DawTheme {
@@ -797,13 +1055,17 @@ private:
     // Browser estilo Ableton (Izquierda) + Host de Plugins Externos VST3
     juce::TextEditor browserSearchBox;
     juce::TextButton catAllBtn{ "Todos" };
-    juce::TextButton catNativeBtn{ "Nativos" };
-    juce::TextButton catPluginsBtn{ "Plug-Ins" };
+    juce::TextButton catPianoBtn{ "Pianos" };
+    juce::TextButton catSynthBtn{ "Synths" };
+    juce::TextButton catDrumBtn{ "Drums" };
+    juce::TextButton catVstBtn{ "VST3" };
     juce::TextButton scanVstBtn{ "Scan VST3" };
     juce::TextButton openGuiBtn{ "Abrir UI" };
     juce::TextButton unloadVstBtn{ "X" };
 
-    int browserCategory = 0; // 0 = Todos, 1 = Nativos, 2 = Plug-Ins VST3
+    int browserCategory = 0; // 0 = Todos, 1 = Pianos, 2 = Synths, 3 = Drums, 4 = VST3
+
+
     juce::StringArray browserItemNames;
     juce::Array<int>  browserItemTypes; // 1..3 = Nativo, 100+ = Indice en knownPlugins
     int selectedBrowserRow = -1;
@@ -890,6 +1152,10 @@ private:
     void recallDmxScene(int sceneIndex);
     void triggerDmxBlackout(bool enableBlackout);
     bool processDmxMidiTrigger(const juce::MidiMessage& message);
+    ArrangementTimeline arrangementTimeline;
+    juce::TextButton timelineToggleBtn{ "TIMELINE" };
+    bool showTimelineView = true;
+
     int selectedMidiTrackIndex = 0;
 
 }
