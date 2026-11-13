@@ -10,14 +10,22 @@ struct RecordedMidiEvent
 class AudioChannelStrip : public juce::Component
 {
 public:
-    AudioChannelStrip(int channelNumber, double defaultFreq)
+    AudioChannelStrip(int channelNumber, double /*defaultFreq*/)
         : chIndex(channelNumber)
     {
-        addAndMakeVisible(waveSelector);
-        waveSelector.addItem("SINE", 1);
-        waveSelector.addItem("SQUARE", 2);
-        waveSelector.addItem("SAW", 3);
-        waveSelector.setSelectedId(1);
+        addAndMakeVisible(inputSelector);
+        inputSelector.addItem("Off (Solo File)", 1);
+        inputSelector.addItem("In 1 (Mono) - Guitar/Mic", 2);
+        inputSelector.addItem("In 2 (Mono) - Bass/Mic", 3);
+        inputSelector.addItem("In 1+2 (Stereo)", 4);
+        inputSelector.setSelectedId(1);
+
+        addAndMakeVisible(monitorBtn);
+        monitorBtn.setClickingTogglesState(true);
+        monitorBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2c2c2e));
+        monitorBtn.setColour(juce::TextButton::buttonOnColourId, juce::Colours::limegreen);
+        monitorBtn.setColour(juce::TextButton::textColourOnId, juce::Colours::black);
+
         addAndMakeVisible(loadAudioBtn);
         loadAudioBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2d4a53));
         addAndMakeVisible(clearAudioBtn);
@@ -30,7 +38,6 @@ public:
                 loadAudioBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2d4a53));
             };
 
-
         auto setupMiniKnob = [this](juce::Slider& knob, double minV, double maxV, double defV, juce::Colour col)
             {
                 addAndMakeVisible(knob);
@@ -42,9 +49,10 @@ public:
                 knob.setColour(juce::Slider::thumbColourId, juce::Colours::white);
             };
 
-        setupMiniKnob(freqSlider, 50.0, 2000.0, defaultFreq, juce::Colours::crimson);
-        freqSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 46, 14);
+        setupMiniKnob(inputGainSlider, 0.0, 2.0, 1.0, juce::Colours::orange);
+        inputGainSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 46, 14);
         setupMiniKnob(panSlider, 0.0, 1.0, 0.5, juce::Colours::dodgerblue);
+        
 
         setupMiniKnob(eqLowSlider, -12.0, 12.0, 0.0, juce::Colours::limegreen);
         setupMiniKnob(eqMidSlider, -12.0, 12.0, 0.0, juce::Colours::gold);
@@ -63,7 +71,7 @@ public:
         volumeSlider.setSliderStyle(juce::Slider::LinearVertical);
         volumeSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 50, 15);
         volumeSlider.setRange(0.0, 1.0, 0.01);
-        volumeSlider.setValue(0.6);
+        volumeSlider.setValue(0.75);
         volumeSlider.setColour(juce::Slider::thumbColourId, juce::Colours::orangered);
         volumeSlider.setColour(juce::Slider::trackColourId, juce::Colours::white);
 
@@ -99,7 +107,7 @@ public:
         g.setColour(juce::Colours::white.withAlpha(0.75f));
         g.drawRect(0, 0, w, h, 1);
 
-        g.setColour(juce::Colours::white);
+        g.setColour(juce::Colour(0xff00b4d8));
         g.fillRect(0, 0, w, 22);
         g.setColour(juce::Colours::black);
         g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
@@ -107,14 +115,14 @@ public:
 
         g.setColour(juce::Colours::lightgrey);
         g.setFont(9.0f);
-        g.drawText("PITCH", 0, 50, w, 11, juce::Justification::centred);
+        g.drawText("IN GAIN", 0, 50, w, 11, juce::Justification::centred);
         g.drawText("HI", 4, 114, 28, 11, juce::Justification::centred);
         g.drawText("MID", 34, 114, 28, 11, juce::Justification::centred);
         g.drawText("LOW", 64, 114, 28, 11, juce::Justification::centred);
         g.drawText("PAN", 0, 162, w, 11, juce::Justification::centred);
         g.drawText("LEVEL", 0, 245, w, 11, juce::Justification::centred);
 
-        g.setColour(juce::Colours::white);
+        g.setColour(juce::Colour(0xff00b4d8));
         g.fillRect(0, h - 20, w, 20);
         g.setColour(juce::Colours::black);
         g.setFont(juce::FontOptions(12.0f, juce::Font::bold));
@@ -126,11 +134,12 @@ public:
         int w = getWidth();
         int h = getHeight();
 
-        waveSelector.setBounds(5, 25, w - 66, 21);
-        loadAudioBtn.setBounds(w - 59, 25, 28, 21);
-        clearAudioBtn.setBounds(w - 29, 25, 24, 21);
+        inputSelector.setBounds(4, 25, w - 8, 21);
+        monitorBtn.setBounds(4, 48, 28, 18);
+        loadAudioBtn.setBounds(w - 57, 48, 28, 18);
+        clearAudioBtn.setBounds(w - 27, 48, 23, 18);
 
-        freqSlider.setBounds(15, 61, w - 30, 50);
+        inputGainSlider.setBounds(15, 67, w - 30, 44);
         eqHighSlider.setBounds(4, 125, 28, 32);
         eqMidSlider.setBounds(34, 125, 28, 32);
         eqLowSlider.setBounds(64, 125, 28, 32);
@@ -139,6 +148,10 @@ public:
         soloButton.setBounds(50, 218, 35, 22);
         volumeSlider.setBounds(15, 258, w - 30, h - 282);
     }
+
+    juce::ComboBox inputSelector;
+    juce::ComboBox& waveSelector = inputSelector;
+    juce::TextButton monitorBtn{ "MON" };
     juce::TextButton loadAudioBtn{ "FILE" };
     juce::TextButton clearAudioBtn{ "CLR" };
 
@@ -147,52 +160,54 @@ public:
     bool hasLoadedSample = false;
 
     int chIndex;
-    juce::ComboBox waveSelector;
-    juce::Slider freqSlider, panSlider, volumeSlider;
+    juce::Slider inputGainSlider, panSlider, volumeSlider;
+    juce::Slider& freqSlider = inputGainSlider;
     juce::Slider eqLowSlider, eqMidSlider, eqHighSlider;
     juce::IIRFilter lowFilter, midFilter, highFilter;
     juce::TextButton muteButton{ "M" }, soloButton{ "S" };
     double phase = 0.0;
-};
-//==============================================================================
-// Instrumento Virtual Nativo Polifónico por Canal (Synth con Pitch Bend y Mod)
-struct MidawSynthSound : public juce::SynthesiserSound
-{
-    bool appliesToNote(int) override { return true; }
-    bool appliesToChannel(int) override { return true; }
-};
 
-struct MidawSynthVoice : public juce::SynthesiserVoice
-{
-    bool canPlaySound(juce::SynthesiserSound* sound) override
+    };
+    //==============================================================================
+    // Instrumento Virtual Nativo Polifónico por Canal (Synth con Pitch Bend y Mod)
+    struct MidawSynthSound : public juce::SynthesiserSound
     {
-        return dynamic_cast<MidawSynthSound*> (sound) != nullptr;
-    }
+        bool appliesToNote(int) override { return true; }
+        bool appliesToChannel(int) override { return true; }
+    };
 
-    void startNote(int midiNoteNumber, float velocity, juce::SynthesiserSound*, int currentPitchWheelPosition) override
+    struct MidawSynthVoice : public juce::SynthesiserVoice
     {
-        currentAngle = 0.0;
-        level = velocity * 0.5;
-        tailOff = 0.0;
-
-        double sr = getSampleRate() > 0.0 ? getSampleRate() : 48000.0;
-        auto cyclesPerSecond = juce::MidiMessage::getMidiNoteInHertz(midiNoteNumber);
-        baseAngleDelta = cyclesPerSecond / sr;
-
-        double normPitch = (currentPitchWheelPosition - 8192) / 8192.0;
-        pitchBendFactor = std::pow(2.0, (normPitch * 2.0) / 12.0);
-        angleDelta = baseAngleDelta * pitchBendFactor;
-    }
-
-    void stopNote(float, bool allowTailOff) override
-    {
-        if (allowTailOff)
+        bool canPlaySound(juce::SynthesiserSound* sound) override
         {
-            if (tailOff == 0.0) tailOff = 1.0;
+            return dynamic_cast<MidawSynthSound*> (sound) != nullptr;
         }
-        else
+
+        void startNote(int midiNoteNumber, float velocity, juce::SynthesiserSound*, int currentPitchWheelPosition) override
         {
-            clearCurrentNote();
+            currentAngle = 0.0;
+            level = velocity * 0.5;
+            tailOff = 0.0;
+
+            double sr = getSampleRate() > 0.0 ? getSampleRate() : 48000.0;
+            auto cyclesPerSecond = juce::MidiMessage::getMidiNoteInHertz(midiNoteNumber);
+            baseAngleDelta = cyclesPerSecond / sr;
+
+            double normPitch = (currentPitchWheelPosition - 8192) / 8192.0;
+            pitchBendFactor = std::pow(2.0, (normPitch * 2.0) / 12.0);
+            angleDelta = baseAngleDelta * pitchBendFactor;
+        }
+
+        void stopNote(float, bool allowTailOff) override
+        {
+            if (allowTailOff)
+            {
+                if (tailOff == 0.0) tailOff = 1.0;
+            }
+            else
+            {
+                clearCurrentNote();
+
             angleDelta = 0.0;
             baseAngleDelta = 0.0;
         }
