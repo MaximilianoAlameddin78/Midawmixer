@@ -202,6 +202,12 @@ public:
 
     struct MidawSynthVoice : public juce::SynthesiserVoice
     {
+        std::vector<float> stringBuffer;
+        int stringWritePos = 0;
+        float stringPrevSample = 0.0f;
+        float pluckBurst = 0.0f;
+
+
         bool canPlaySound(juce::SynthesiserSound* sound) override
         {
             return dynamic_cast<MidawSynthSound*> (sound) != nullptr;
@@ -221,6 +227,24 @@ public:
             double sr = getSampleRate() > 0.0 ? getSampleRate() : 48000.0;
             auto cyclesPerSecond = juce::MidiMessage::getMidiNoteInHertz(midiNoteNumber);
             baseAngleDelta = cyclesPerSecond / sr;
+            if (presetType == 5 || presetType == 6 || presetType == 7)
+            {
+                double targetHz = (presetType == 5 && midiNoteNumber >= 48) ? cyclesPerSecond * 0.5 : cyclesPerSecond;
+                int delayLen = juce::jlimit(16, 4096, (int)(sr / juce::jmax(20.0, targetHz)));
+                stringBuffer.assign(delayLen, 0.0f);
+                stringWritePos = 0;
+                stringPrevSample = 0.0f;
+
+                float lp = 0.0f;
+                float smooth = (presetType == 5) ? 0.86f : (presetType == 6 ? 0.45f : 0.30f);
+                for (int i = 0; i < delayLen; ++i)
+                {
+                    float rnd = (drumRng.nextFloat() * 2.0f - 1.0f);
+                    lp = smooth * lp + (1.0f - smooth) * rnd;
+                    float fund = (float)std::sin(2.0 * 3.14159265359 * (double)i / (double)delayLen);
+                    stringBuffer[i] = (lp * 0.78f + fund * 0.42f);
+                }
+            }
 
             if (presetType == 4)
             {
@@ -267,44 +291,98 @@ public:
         void controllerMoved(int controllerNumber, int newControllerValue) override
         {
             if (controllerNumber == 1)
-                modWheelDepth = newControllerValue / 127.0f;
+                modWheelDepth = (float)newControllerValue / 127.0f;
         }
 
         void renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int startSample, int numSamples) override
         {
-            if (angleDelta != 0.0)
+            if (baseAngleDelta > 0.0)
             {
                 while (--numSamples >= 0)
                 {
+                    lfoPhase += 4.5 / getSampleRate();
+                    if (lfoPhase >= 1.0) lfoPhase -= 1.0;
+                    double vibrato = 1.0 + std::sin(lfoPhase * 2.0 * 3.14159265359) * (0.015 * modWheelDepth);
+                    angleDelta = baseAngleDelta * vibrato;
+
                     float raw = 0.0f;
-                    if (presetType == 1)
+                    if (presetType == 1) // PAD ATMOSFERICO
                     {
-                        raw = (float)std::sin(currentAngle * 2.0 * 3.14159265359);
+                        double twoPi = 2.0 * 3.14159265359;
+                        raw = (float)((std::sin(currentAngle * twoPi) * 0.55 + std::sin(currentAngle * 1.004 * twoPi) * 0.45) * 0.8);
                     }
-                    else if (presetType == 2)
+                    else if (presetType == 2) // PIANO / KEYS
                     {
-                        raw = (float)(std::sin(currentAngle * 2.0 * 3.14159265359) + (0.35 + modWheelDepth * 0.65) * std::sin(currentAngle * 4.0 * 3.14159265359)) * 0.7f;
+                        double twoPi = 2.0 * 3.14159265359;
+                        raw = (float)((std::sin(currentAngle * twoPi) * 0.65 + std::sin(currentAngle * 2.0 * twoPi) * 0.25 + std::sin(currentAngle * 3.0 * twoPi) * 0.10) * 0.85);
                     }
-                    else if (presetType == 4)
+                    else if (presetType == 3) // SAW LEAD / BASS ANALOGICO
+                    {
+                        double phase = currentAngle - std::floor(currentAngle);
+                        raw = (float)(2.0 * phase - 1.0) * 0.65f;
+                    }
+                    else if (presetType == 5) // BAJO ELECTRICO REAL (FINGER / PICK BASS)
+                    {
+                        if (!stringBuffer.empty())
+                        {
+                            int len = (int)stringBuffer.size();
+                            float cur = stringBuffer[stringWritePos];
+                            float next = stringBuffer[(stringWritePos + 1) % len];
+                            float filtered = 0.9965f * (0.68f * cur + 0.32f * next);
+                            stringBuffer[stringWritePos] = filtered;
+                            stringWritePos = (stringWritePos + 1) % len;
+                            raw = std::tanh(filtered * 1.85f) * 1.15f;
+                        }
+                    }
+                    else if (presetType == 6) // GUITARRA ACUSTICA REAL (CUERDAS DE ACERO + CAJA)
+                    {
+                        if (!stringBuffer.empty())
+                        {
+                            int len = (int)stringBuffer.size();
+                            float cur = stringBuffer[stringWritePos];
+                            float next = stringBuffer[(stringWritePos + 1) % len];
+                            float filtered = 0.9945f * (0.50f * cur + 0.50f * next);
+                            stringBuffer[stringWritePos] = filtered;
+                            stringWritePos = (stringWritePos + 1) % len;
+                            stringPrevSample = 0.75f * stringPrevSample + 0.25f * filtered;
+                            raw = (filtered * 1.15f + stringPrevSample * 0.45f);
+                        }
+                    }
+                    else if (presetType == 7) // GUITARRA ELECTRICA REAL (AMPLIFICADOR + OVERDRIVE)
+                    {
+                        if (!stringBuffer.empty())
+                        {
+                            int len = (int)stringBuffer.size();
+                            float cur = stringBuffer[stringWritePos];
+                            float next = stringBuffer[(stringWritePos + 1) % len];
+                            float filtered = 0.9978f * (0.52f * cur + 0.48f * next);
+                            stringBuffer[stringWritePos] = filtered;
+                            stringWritePos = (stringWritePos + 1) % len;
+                            float gain = 2.4f + modWheelDepth * 4.5f;
+                            float amp = std::tanh(filtered * gain);
+                            stringPrevSample = 0.62f * stringPrevSample + 0.38f * amp;
+                            raw = stringPrevSample * 0.95f;
+                        }
+                    }
+                    else if (presetType == 4) // BATERIA
                     {
                         int padType = getDrumPieceType(currentMidiNote);
                         float white = drumRng.nextFloat() * 2.0f - 1.0f;
-                        float metallic = white - lastNoiseSample;
-                        lastNoiseSample = white * 0.85f;
+                        float metallic = (std::sin(currentAngle * 23.0) + std::sin(currentAngle * 37.0) + std::sin(currentAngle * 51.0)) * 0.33f;
 
                         if (padType == 0) // KICK
                         {
-                            double freqMult = 0.32 + 0.68 * pitchEnv;
-                            raw = std::tanh((float)std::sin(currentAngle * 2.0 * 3.14159265359 * freqMult) * 1.8f) * (float)drumEnv;
-                            pitchEnv *= 0.9982;
-                            drumEnv *= 0.99945;
+                            static double kickPhase = 0.0;
+                            float freq = 42.0f + 135.0f * (float)pitchEnv;
+                            kickPhase += (double)freq / getSampleRate();
+                            raw = (float)(std::sin(kickPhase * 2.0 * 3.14159265359) * drumEnv * 1.25);
+                            pitchEnv *= 0.9972;
+                            drumEnv *= 0.99935;
                         }
                         else if (padType == 1) // SNARE
                         {
-                            float tone = (float)std::sin(currentAngle * 2.0 * 3.14159265359 * (0.65 + 0.35 * pitchEnv)) * (float)pitchEnv;
-                            raw = (tone * 0.65f + (white * 0.5f + metallic * 0.5f) * 0.85f) * (float)drumEnv;
-                            pitchEnv *= 0.9985;
-                            drumEnv *= 0.99915;
+                            raw = (float)(std::sin(currentAngle * 185.0 * 2.0 * 3.14159265359) * 0.45 + white * 0.85) * (float)drumEnv;
+                            drumEnv *= 0.9991;
                         }
                         else if (padType == 2) // CLOSED HI-HAT
                         {
@@ -313,39 +391,28 @@ public:
                         }
                         else if (padType == 3) // OPEN HI-HAT
                         {
-                            raw = metallic * (float)drumEnv * 0.75f;
-                            drumEnv *= 0.99935;
+                            raw = (metallic * 0.7f + white * 0.3f) * (float)drumEnv * 0.75f;
+                            drumEnv *= 0.99945;
                         }
-                        else if (padType == 4 || padType == 5) // LOW / HIGH TOMS
+                        else if (padType == 4 || padType == 5) // TOMS
                         {
-                            double freqMult = 0.55 + 0.45 * pitchEnv;
-                            raw = (float)std::sin(currentAngle * 2.0 * 3.14159265359 * freqMult) * (float)drumEnv * 1.15f;
-                            pitchEnv *= 0.9988;
-                            drumEnv *= 0.99925;
+                            float baseF = (padType == 4) ? 75.0f : 125.0f;
+                            float freq = baseF + 70.0f * (float)pitchEnv;
+                            currentAngle += (double)freq / getSampleRate();
+                            raw = (float)(std::sin(currentAngle * 2.0 * 3.14159265359) * drumEnv * 1.1);
+                            pitchEnv *= 0.998;
+                            drumEnv *= 0.9992;
                         }
-                        else if (padType == 6) // CLAP / RIMSHOT
+                        else if (padType == 6) // CLAP / RIM
                         {
-                            float burst = (drumEnv > 0.75 || (drumEnv < 0.62 && drumEnv > 0.45)) ? 1.0f : 0.45f;
-                            raw = (white * 0.6f + metallic * 0.4f) * burst * (float)drumEnv * 0.9f;
-                            drumEnv *= 0.9989;
+                            raw = (white * 0.9f + metallic * 0.2f) * (float)drumEnv * 0.95f;
+                            drumEnv *= 0.9985;
                         }
-                        else // CRASH CYMBAL
+                        else // CRASH / RIDE
                         {
-                            raw = (metallic * 0.75f + white * 0.25f) * (float)drumEnv * 0.8f;
-                            drumEnv *= 0.99972;
+                            raw = (metallic * 0.6f + white * 0.4f) * (float)drumEnv * 0.8f;
+                            drumEnv *= 0.99965;
                         }
-
-                        if (drumEnv <= 0.002)
-                        {
-                            clearCurrentNote();
-                            angleDelta = 0.0;
-                            baseAngleDelta = 0.0;
-                            break;
-                        }
-                    }
-                    else
-                    {
-                        raw = (float)(2.0 * std::fmod(currentAngle, 1.0) - 1.0) * (0.6f + modWheelDepth * 0.4f);
                     }
 
                     float currentSample = raw * (float)level * (tailOff > 0.0 ? (float)tailOff : 1.0f);
@@ -369,9 +436,12 @@ public:
                 }
             }
         }
-
         int presetType = 2;
     private:
+        double lfoPhase = 0.0;
+
+
+
         static int getDrumPieceType(int note)
         {
             if (note == 35 || note == 36) return 0; // Kick
@@ -419,6 +489,10 @@ public:
             instSelector.addItem("Harmonic Keys", 3);
             instSelector.addItem("Saw Lead", 4);
             instSelector.addItem("Drum Kit", 5);
+            instSelector.addItem("Bajo Electrico", 6);
+            instSelector.addItem("Guitarra Acustica", 7);
+            instSelector.addItem("Guitarra Electrica", 8);
+
             instSelector.setSelectedId(1, juce::dontSendNotification);
             selectedInstrumentMode = 0;
             assignedInstrumentName = "None (Off)";
@@ -551,7 +625,8 @@ public:
                             for (int v = 0; v < channelSynth.getNumVoices(); ++v)
                             {
                                 if (auto* voice = dynamic_cast<MidawSynthVoice*>(channelSynth.getVoice(v)))
-                                    voice->presetType = juce::jlimit(1, 4, selectedInstrumentMode);
+                                    voice->presetType = juce::jlimit(1, 7, selectedInstrumentMode);
+
                             }
                         }
 
@@ -1058,12 +1133,15 @@ private:
     juce::TextButton catPianoBtn{ "Pianos" };
     juce::TextButton catSynthBtn{ "Synths" };
     juce::TextButton catDrumBtn{ "Drums" };
+    juce::TextButton catStringsBtn{ "Cuerdas" };
+    
     juce::TextButton catVstBtn{ "VST3" };
     juce::TextButton scanVstBtn{ "Scan VST3" };
     juce::TextButton openGuiBtn{ "Abrir UI" };
     juce::TextButton unloadVstBtn{ "X" };
 
     int browserCategory = 0; // 0 = Todos, 1 = Pianos, 2 = Synths, 3 = Drums, 4 = VST3
+    int openFolder = 3; // Carpeta desplegada por defecto (3 = Bajo y Guitarras; -1 = todas cerradas)
 
 
     juce::StringArray browserItemNames;

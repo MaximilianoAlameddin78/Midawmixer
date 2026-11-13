@@ -131,21 +131,24 @@ MainComponent::MainComponent() : AudioAppComponent()
             catAllBtn.setColour(juce::TextButton::buttonColourId, cat == 0 ? activeCol : normalCol);
             catPianoBtn.setColour(juce::TextButton::buttonColourId, cat == 1 ? activeCol : normalCol);
             catSynthBtn.setColour(juce::TextButton::buttonColourId, cat == 2 ? activeCol : normalCol);
-            catDrumBtn.setColour(juce::TextButton::buttonColourId, cat == 3 ? activeCol : normalCol);
-            catVstBtn.setColour(juce::TextButton::buttonColourId, cat == 4 ? activeCol : normalCol);
+            catStringsBtn.setColour(juce::TextButton::buttonColourId, cat == 3 ? activeCol : normalCol);
+            catDrumBtn.setColour(juce::TextButton::buttonColourId, cat == 4 ? activeCol : normalCol);
+            catVstBtn.setColour(juce::TextButton::buttonColourId, cat == 5 ? activeCol : normalCol);
             rebuildBrowserList();
         };
 
-    for (auto* b : { &catAllBtn, &catPianoBtn, &catSynthBtn, &catDrumBtn, &catVstBtn })
+    for (auto* b : { &catAllBtn, &catPianoBtn, &catSynthBtn, &catStringsBtn, &catDrumBtn, &catVstBtn })
         addAndMakeVisible(b);
 
     catAllBtn.onClick = [selectBrowserCat]() { selectBrowserCat(0); };
     catPianoBtn.onClick = [selectBrowserCat]() { selectBrowserCat(1); };
     catSynthBtn.onClick = [selectBrowserCat]() { selectBrowserCat(2); };
-    catDrumBtn.onClick = [selectBrowserCat]() { selectBrowserCat(3); };
-    catVstBtn.onClick = [selectBrowserCat]() { selectBrowserCat(4); };
+    catStringsBtn.onClick = [selectBrowserCat]() { selectBrowserCat(3); };
+    catDrumBtn.onClick = [selectBrowserCat]() { selectBrowserCat(4); };
+    catVstBtn.onClick = [selectBrowserCat]() { selectBrowserCat(5); };
     selectBrowserCat(0);
     addAndMakeVisible(arrangementTimeline);
+
     addAndMakeVisible(timelineToggleBtn);
     timelineToggleBtn.setColour(juce::TextButton::buttonColourId, juce::Colours::deepskyblue);
     timelineToggleBtn.onClick = [this]()
@@ -1225,15 +1228,16 @@ void MainComponent::resized()
     {
         channelViewport.setBounds(275, chY, centerW, chH + 15);
     }
-    catAllBtn.setBounds(brX + 6, chY + 54, 70, 22);
-    catPianoBtn.setBounds(brX + 6, chY + 78, 70, 22);
-    catSynthBtn.setBounds(brX + 6, chY + 102, 70, 22);
-    catDrumBtn.setBounds(brX + 6, chY + 126, 70, 22);
-    catVstBtn.setBounds(brX + 6, chY + 150, 70, 22);
-    scanVstBtn.setBounds(brX + 6, chY + 180, 70, 24);
-    openGuiBtn.setBounds(brX + 6, chY + 208, 70, 22);
-    unloadVstBtn.setBounds(brX + 6, chY + 234, 70, 22);
-    browserListBox.setBounds(brX + 80, chY + 54, brW - 86, chH - 60);
+    catAllBtn.setBounds(brX + 6, chY + 52, 70, 20);
+    catPianoBtn.setBounds(brX + 6, chY + 74, 70, 20);
+    catSynthBtn.setBounds(brX + 6, chY + 96, 70, 20);
+    catStringsBtn.setBounds(brX + 6, chY + 118, 70, 20);
+    catDrumBtn.setBounds(brX + 6, chY + 140, 70, 20);
+    catVstBtn.setBounds(brX + 6, chY + 162, 70, 20);
+    scanVstBtn.setBounds(brX + 6, chY + 188, 70, 22);
+    openGuiBtn.setBounds(brX + 6, chY + 213, 70, 20);
+    unloadVstBtn.setBounds(brX + 6, chY + 236, 70, 20);
+    browserListBox.setBounds(brX + 80, chY + 52, brW - 86, chH - 58);
 
 
     
@@ -1293,58 +1297,112 @@ void MainComponent::BrowserListModel::paintListBoxItem(int row, juce::Graphics& 
 void MainComponent::BrowserListModel::selectedRowsChanged(int lastRowSelected)
 {
     if (owner != nullptr)
+    {
         owner->selectedBrowserRow = lastRowSelected;
+        if (lastRowSelected >= 0 && lastRowSelected < owner->browserItemTypes.size())
+        {
+            int id = owner->browserItemTypes[lastRowSelected];
+            if (id < 0)
+            {
+                int clickedFolder = -id;
+                owner->openFolder = (owner->openFolder == clickedFolder) ? -1 : clickedFolder;
+
+                owner->rebuildBrowserList();
+            }
+        }
+    }
 }
 
 void MainComponent::BrowserListModel::listBoxItemDoubleClicked(int row, const juce::MouseEvent&)
 {
     if (owner != nullptr)
         owner->loadBrowserItem(row);
+    
+
 }
+
+
 
 void MainComponent::rebuildBrowserList()
 {
-    browserItemNames.clear();
-    browserItemTypes.clear();
-    auto query = browserSearchBox.getText().trim().toLowerCase();
 
-    auto tryAdd = [&](const juce::String& label, int typeId)
-        {
-            if (query.isEmpty() || label.toLowerCase().contains(query))
-            {
-                browserItemNames.add(label);
-                browserItemTypes.add(typeId);
-            }
-        };
+                {
+                    browserItemNames.clear();
+                    browserItemTypes.clear();
+                    auto query = browserSearchBox.getText().trim().toLowerCase();
 
-    // Categoria 0 = Todos | 1 = Pianos | 2 = Sintetizadores | 3 = Baterias | 4 = VST3
-    if (browserCategory == 0 || browserCategory == 1)
-    {
-        tryAdd("[Piano] Grand Piano", 2);
-        tryAdd("[Piano] Electric Piano (Rhodes)", 2);
-        tryAdd("[Piano] Clavinet Keys", 2);
-    }
+                    auto addFolderHeader = [&](int folderId, const juce::String& folderTitle)
+                        {
+                            if (query.isEmpty())
+                            {
+                                bool isOpen = (browserCategory != 0) || (openFolder == folderId);
+                                juce::String arrow = isOpen ? juce::String::fromUTF8("\xe2\x96\xbc ") : juce::String::fromUTF8("\xe2\x96\xb6 ");
+                                browserItemNames.add(arrow + folderTitle);
+                                browserItemTypes.add(-folderId);
+                            }
+                        };
 
-    if (browserCategory == 0 || browserCategory == 2)
-    {
-        tryAdd("[Synth] Pad Atmosferico", 1);
-        tryAdd("[Synth] Saw Lead Solista", 3);
-        tryAdd("[Synth] Bass Analogico", 3);
-    }
+                    auto addInstrument = [&](int folderId, const juce::String& label, int typeId)
+                        {
+                            bool isVisible = query.isNotEmpty() ? label.toLowerCase().contains(query)
+                                : ((browserCategory == folderId) || (browserCategory == 0 && openFolder == folderId));
+                            if (isVisible)
+                            {
+                                browserItemNames.add("    " + label);
+                                browserItemTypes.add(typeId);
+                            }
+                        };
 
-    if (browserCategory == 0 || browserCategory == 3)
-    {
-        tryAdd("[Drums] Acoustic Kit", 4);
-        tryAdd("[Drums] 808 Electronic Kit", 4);
+                    // Carpeta 1: Pianos & Keys
+                    if (browserCategory == 0 || browserCategory == 1)
+                    {
+                        addFolderHeader(1, "Pianos & Keys");
+                        addInstrument(1, "Grand Piano", 2);
+                        addInstrument(1, "Electric Piano (Rhodes)", 2);
+                        addInstrument(1, "Clavinet Keys", 2);
+                    }
 
-    }
+                    // Carpeta 2: Synths & Pads
+                    if (browserCategory == 0 || browserCategory == 2)
+                    {
+                        addFolderHeader(2, "Synths & Pads");
+                        addInstrument(2, "Pad Atmosferico", 1);
+                        addInstrument(2, "Saw Lead Solista", 3);
+                        addInstrument(2, "Bass Analogico", 3);
+                    }
 
-    if (browserCategory == 0 || browserCategory == 4)
-    {
-        auto types = knownPlugins.getTypes();
-        for (int i = 0; i < types.size(); ++i)
-            tryAdd("[VST3] " + types[i].manufacturerName + " - " + types[i].name, 100 + i);
-    }
+                    // Carpeta 3: Bajo y Guitarras
+                    if (browserCategory == 0 || browserCategory == 3)
+                    {
+                        addFolderHeader(3, "Bajo y Guitarras");
+                        addInstrument(3, "Bajo Electrico (Finger)", 5);
+                        addInstrument(3, "Guitarra Acustica", 6);
+                        addInstrument(3, "Guitarra Electrica", 7);
+                    }
+
+                    // Carpeta 4: Drums & Percussion
+                    if (browserCategory == 0 || browserCategory == 4)
+                    {
+                        addFolderHeader(4, "Drums & Percussion");
+                        addInstrument(4, "Acoustic Kit", 4);
+                        addInstrument(4, "808 Electronic Kit", 4);
+                    }
+
+                    // Carpeta 5: Plug-ins VST3
+                    if (browserCategory == 0 || browserCategory == 5)
+                    {
+                        addFolderHeader(5, "Plug-ins VST3");
+                        auto types = knownPlugins.getTypes();
+                        for (int i = 0; i < types.size(); ++i)
+                            addInstrument(5, types[i].manufacturerName + " - " + types[i].name, 100 + i);
+                    }
+
+                    browserListBox.updateContent();
+                    repaint();
+                }
+
+
+    
 
     browserListBox.updateContent();
     repaint();
@@ -1356,6 +1414,9 @@ void MainComponent::loadBrowserItem(int row)
         return;
 
     int typeId = browserItemTypes[row];
+    if (typeId < 0)
+        return;
+
     juce::String itemName = browserItemNames[row];
 
     int targetMidiIdx = juce::jlimit(0, juce::jmax(0, midiChannels.size() - 1), selectedMidiTrackIndex);
