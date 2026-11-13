@@ -380,6 +380,10 @@ public:
             addAndMakeVisible(inSelector);
             addAndMakeVisible(outSelector);
             addChildComponent(instSelector);
+            addAndMakeVisible(inSelector);
+            addAndMakeVisible(outSelector);
+            addChildComponent(instSelector);
+            addMouseListener(this, true);
 
             for (int v = 0; v < 8; ++v)
                 channelSynth.addVoice(new MidawSynthVoice());
@@ -586,8 +590,17 @@ public:
                                 outSelector.addItem(outputs[i].name, i + 2);
                             outSelector.setSelectedId(prevOut > 0 ? prevOut : 1, juce::dontSendNotification);
                         }
+                        void mouseDown(const juce::MouseEvent&) override
+                        {
+                            if (onSelectChannel)
+                                onSelectChannel(midiIndex - 1);
+                        }
 
+                        bool isSelectedTrack = false;
+                        std::function<void(int)> onSelectChannel;
+                        
                         void paint(juce::Graphics& g) override
+
                         {
                             int w = getWidth();
                             int h = getHeight();
@@ -595,7 +608,9 @@ public:
                             g.setColour(juce::Colour(0xff182026));
                             g.fillRect(0, 0, w, h);
                             g.setColour(juce::Colours::deepskyblue.withAlpha(0.8f));
-                            g.drawRect(0, 0, w, h, 1);
+                            g.setColour(isSelectedTrack ? juce::Colours::gold : juce::Colours::deepskyblue.withAlpha(0.8f));
+                            g.drawRect(0, 0, w, h, isSelectedTrack ? 2 : 1);
+
 
                             g.setColour(juce::Colours::deepskyblue);
                             g.fillRect(0, 0, w, 22);
@@ -875,6 +890,7 @@ private:
     void recallDmxScene(int sceneIndex);
     void triggerDmxBlackout(bool enableBlackout);
     bool processDmxMidiTrigger(const juce::MidiMessage& message);
+    int selectedMidiTrackIndex = 0;
 
 }
 ;

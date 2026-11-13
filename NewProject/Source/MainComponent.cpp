@@ -492,6 +492,18 @@ void MainComponent::addMidiChannel()
 {
     int nextNum = midiChannels.size() + 1;
     auto* strip = midiChannels.add(new MidiChannelStrip(nextNum, deviceManager));
+    strip->isSelectedTrack = (nextNum == 1);
+    strip->onSelectChannel = [this](int idx)
+
+        {
+            selectedMidiTrackIndex = idx;
+            for (int k = 0; k < midiChannels.size(); ++k)
+            {
+                midiChannels[k]->isSelectedTrack = (k == idx);
+                midiChannels[k]->repaint();
+            }
+        };
+
     channelContainer.addAndMakeVisible(strip);
     layoutDynamicChannels();
 }
@@ -554,71 +566,60 @@ void MainComponent::triggerInternalSynths(const juce::MidiMessage& message, floa
             }
         });
 }
-
-void MainComponent::handleIncomingMidiMessage(juce::MidiInput* source, const juce::MidiMessage& message)
-{
-    if (source == nullptr) return;
-    keyboardState.processNextMidiEvent(message);
-
-    juce::String sourceId = source->getIdentifier();
-    if (motorizedMidiOut != nullptr && processMotorizedSurfaceInput(message)) 
-        return;
-
-    if (processDmxMidiTrigger(message))
-        return;
-
-    for (int i = 0; i < midiChannels.size(); ++i)
+    void MainComponent::handleIncomingMidiMessage(juce::MidiInput * source, const juce::MidiMessage & message)
     {
-        auto* ch = midiChannels[i];
-        if (ch->assignedInId == sourceId || ch->assignedInId == "ALL" || (ch->assignedInId.isEmpty() && ch->instSelector.getSelectedId() > 1))
+        if (source == nullptr)
+            return;
 
+        keyboardState.processNextMidiEvent(message);
+        juce::String sourceId = source->getIdentifier();
+
+        // Solo interceptar faders/botones de control si NO es una nota musical
+        if (!message.isNoteOnOrOff())
         {
-            ch->pushIncomingMidi(message);
-            if (ch->midiOut != nullptr)
-                ch->midiOut->sendMessageNow(message);
+            if (motorizedMidiOut != nullptr && processMotorizedSurfaceInput(message))
+                return;
+
+            if (processDmxMidiTrigger(message))
+                return;
+        }
+
+        bool anyMidiSolo = false;
+        for (auto* m : midiChannels)
+            if (m->soloButton.getToggleState())
+                anyMidiSolo = true;
+
+        for (int i = 0; i < midiChannels.size(); ++i)
+        {
+            auto* m = midiChannels[i];
+            bool isActive = anyMidiSolo ? m->soloButton.getToggleState() : !m->muteButton.getToggleState();
+
+            // Solo recibe este canal si tiene asignado exactamente este dispositivo (o "ALL" elegido manualmente)
+            bool matchesInput = m->assignedInId.isNotEmpty() && (m->assignedInId == sourceId || m->assignedInId == "ALL");
+
+            if (matchesInput && isActive)
+            {
+                m->hasActivity = true;
+                m->pushIncomingMidi(message);
+
+                if (isRecordingMaster && message.isNoteOnOrOff())
+                {
+                    double ticks = ((juce::Time::getMillisecondCounterHiRes() * 0.001) - masterRecStartTime) * 1920.0;
+                    recordedMidiSeq.addEvent(message, ticks);
+                }
+
+                if (m->isRecording && message.isNoteOnOrOff())
+                {
+                    double relTime = (juce::Time::getMillisecondCounterHiRes() * 0.001) - m->recordStartTime;
+                    m->recordedEvents.push_back({ relTime, message });
+                }
+
+                if (m->midiOut != nullptr)
+                    m->midiOut->sendMessageNow(message);
+            }
         }
     }
 
-    return;
-
-
-    bool anyMidiSolo = false;
-
-    for (auto* m : midiChannels)
-        if (m->soloButton.getToggleState()) anyMidiSolo = true;
-
-    for (auto* m : midiChannels)
-    {
-        bool isActive = anyMidiSolo ? m->soloButton.getToggleState() : !m->muteButton.getToggleState();
-
-        if (m->assignedInId == sourceId && isActive)
-        {
-            m->hasActivity = true;
-
-            if (isRecordingMaster && (message.isNoteOn() || message.isNoteOff()))
-            {
-                double ticks = ((juce::Time::getMillisecondCounterHiRes() * 0.001) - masterRecStartTime) * 1920.0;
-                recordedMidiSeq.addEvent(message, ticks);
-            }
-
-            if (m->isRecording && (message.isNoteOn() || message.isNoteOff()))
-            {
-                double relTime = (juce::Time::getMillisecondCounterHiRes() * 0.001) - m->recordStartTime;
-                m->recordedEvents.push_back({ relTime, message });
-            }
-
-            if (m->midiOut != nullptr)
-            {
-                juce::MidiMessage outMsg = message;
-                if (outMsg.isNoteOn())
-                    outMsg.setVelocity(outMsg.getFloatVelocity() * (float)m->velSlider.getValue());
-                m->midiOut->sendMessageNow(outMsg);
-            }
-
-            triggerInternalSynths(message, (float)m->velSlider.getValue());
-        }
-    }
-}
 
 void MainComponent::timerCallback()
 {
@@ -1158,16 +1159,8 @@ void MainComponent::loadBrowserItem(int row)
     int typeId = browserItemTypes[row];
     juce::String itemName = browserItemNames[row];
 
-    // Determinar a que canal MIDI asignar (canal activo o Canal MIDI 1 por defecto)
-    int targetMidiIdx = 0;
-    for (int i = 0; i < midiChannels.size(); ++i)
-    {
-        if (midiChannels[i]->soloButton.getToggleState() || midiChannels[i]->recButton.getToggleState())
-        {
-            targetMidiIdx = i;
-            break;
-        }
-    }
+    int targetMidiIdx = juce::jlimit(0, juce::jmax(0, midiChannels.size() - 1), selectedMidiTrackIndex);
+
 
     if (typeId < 100)
     {
