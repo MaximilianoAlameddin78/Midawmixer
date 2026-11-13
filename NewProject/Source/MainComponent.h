@@ -1120,8 +1120,53 @@ private:
     juce::TextButton saveBtn{ "SAVE" };
     juce::TextButton loadBtn{ "LOAD" };
     juce::TextButton setupButton{ "AUDIO SETUP" };
+    class AudioSetupOverlay : public juce::Component
+    {
+    public:
+        AudioSetupOverlay(juce::AudioDeviceManager& dm)
+        {
+            selector = std::make_unique<juce::AudioDeviceSelectorComponent>(dm, 1, 8, 1, 8, true, true, true, false);
 
-    std::unique_ptr<juce::AudioDeviceSelectorComponent> audioSetupComp;
+
+            addAndMakeVisible(*selector);
+
+            addAndMakeVisible(closeBtn);
+            closeBtn.setColour(juce::TextButton::buttonColourId, juce::Colours::crimson);
+            closeBtn.onClick = [this]()
+                {
+                    if (onClose) onClose();
+                };
+        }
+
+        void paint(juce::Graphics& g) override
+        {
+            g.fillAll(juce::Colour(0xff141b22));
+
+            g.setColour(juce::Colour(0xff1e2933));
+            g.fillRect(0, 0, getWidth(), 34);
+
+            g.setColour(juce::Colours::deepskyblue);
+            g.drawRect(0, 0, getWidth(), getHeight(), 2);
+            g.drawHorizontalLine(34, 0.0f, (float)getWidth());
+
+            g.setColour(juce::Colours::white);
+            g.setFont(juce::FontOptions(13.0f, juce::Font::bold));
+            g.drawText("CONFIGURACION DE AUDIO Y MIDI", 14, 0, getWidth() - 60, 34, juce::Justification::centredLeft);
+        }
+
+        void resized() override
+        {
+            closeBtn.setBounds(getWidth() - 34, 5, 26, 24);
+            selector->setBounds(24, 42, getWidth() - 38, getHeight() - 50);
+        }
+
+        std::unique_ptr<juce::AudioDeviceSelectorComponent> selector;
+        juce::TextButton closeBtn{ "X" };
+        std::function<void()> onClose;
+    };
+
+    std::unique_ptr<AudioSetupOverlay> audioSetupComp;
+
 
     bool isPlaying = false;
     bool showAudioSetup = false;

@@ -216,8 +216,15 @@ MainComponent::MainComponent() : AudioAppComponent()
             resized();
         };
 
-    audioSetupComp = std::make_unique<juce::AudioDeviceSelectorComponent>(deviceManager, 0, 0, 0, 2, true, true, true, false);
+    audioSetupComp = std::make_unique<AudioSetupOverlay>(deviceManager);
+    audioSetupComp->onClose = [this]()
+        {
+            showAudioSetup = false;
+            audioSetupComp->setVisible(false);
+            for (auto* m : midiChannels) m->refreshDevices();
+        };
     addChildComponent(*audioSetupComp);
+
 
     setSize(1180, 680); 
 }
@@ -1118,7 +1125,10 @@ g.fillRoundedRectangle(275.0f, (float)chY, (float)(getWidth() - 535), (float)chH
     g.fillRect(fxX, chY + chH - 20, fxW, 20);
     g.setColour(juce::Colours::white);
     g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
-    g.drawText("FX BUS", fxX, chY + chH - 20, fxW, 20, juce::Justification::centred);
+    g.drawText("MASTER FX", fxX, chY + chH - 20, fxW, 20, juce::Justification::centred);
+
+
+
 
     int masterX = getWidth() - 135;
     int masterW = 115;
@@ -1215,7 +1225,7 @@ void MainComponent::resized()
     {
         channelViewport.setBounds(275, chY, centerW, chH + 15);
     }
-
+    catAllBtn.setBounds(brX + 6, chY + 54, 70, 22);
     catPianoBtn.setBounds(brX + 6, chY + 78, 70, 22);
     catSynthBtn.setBounds(brX + 6, chY + 102, 70, 22);
     catDrumBtn.setBounds(brX + 6, chY + 126, 70, 22);
@@ -1226,7 +1236,7 @@ void MainComponent::resized()
     browserListBox.setBounds(brX + 80, chY + 54, brW - 86, chH - 60);
 
 
-    channelViewport.setBounds(275, chY, getWidth() - 535, chH + 15);
+    
     midiKeyboard.setBounds(15, getHeight() - keyH - 5, getWidth() - 30, keyH);
 
     int fxX = getWidth() - 245;
@@ -1238,11 +1248,15 @@ void MainComponent::resized()
 
     int masterX = getWidth() - 135;
     masterVolumeSlider.setBounds(masterX + 10, chY + 50, 50, chH - 75);
-
     if (audioSetupComp != nullptr && showAudioSetup)
-        audioSetupComp->setBounds(440, chY, getWidth() - 700, chH);
-}
+    {
+        int sw = juce::jmin(560, getWidth() - 40);
+        int sh = juce::jmin(560, getHeight() - 40);
+        audioSetupComp->setBounds((getWidth() - sw) / 2, (getHeight() - sh) / 2, sw, sh);
+        audioSetupComp->toFront(false);
+    }
 
+}
 void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
 {
     masterReverb.setSampleRate(sampleRate);
