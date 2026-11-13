@@ -183,15 +183,33 @@ public:
             return dynamic_cast<MidawSynthSound*> (sound) != nullptr;
         }
 
+    
+        
         void startNote(int midiNoteNumber, float velocity, juce::SynthesiserSound*, int currentPitchWheelPosition) override
         {
             currentAngle = 0.0;
-            level = velocity * 0.5;
+            level = velocity * 0.75;
             tailOff = 0.0;
+            currentMidiNote = midiNoteNumber;
+            drumEnv = 1.0;
+            pitchEnv = 1.0;
 
             double sr = getSampleRate() > 0.0 ? getSampleRate() : 48000.0;
             auto cyclesPerSecond = juce::MidiMessage::getMidiNoteInHertz(midiNoteNumber);
             baseAngleDelta = cyclesPerSecond / sr;
+
+            if (presetType == 4)
+            {
+                int padType = getDrumPieceType(midiNoteNumber);
+                if (padType == 0)      baseAngleDelta = 150.0 / sr;  // Kick (Bombo con pegada y caida a 48 Hz)
+                else if (padType == 1) baseAngleDelta = 210.0 / sr;  // Snare (Caja con golpe y bordona)
+                else if (padType == 2) baseAngleDelta = 1200.0 / sr; // Closed Hi-Hat (Cerrado corto)
+                else if (padType == 3) baseAngleDelta = 950.0 / sr;  // Open Hi-Hat (Abierto)
+                else if (padType == 4) baseAngleDelta = 140.0 / sr;  // Low Tom (Tom grave)
+                else if (padType == 5) baseAngleDelta = 220.0 / sr;  // High Tom (Tom agudo)
+                else if (padType == 6) baseAngleDelta = 340.0 / sr;  // Clap / Rimshot
+                else                   baseAngleDelta = 700.0 / sr;  // Crash Cymbal (Platillo largo)
+            }
 
             double normPitch = (currentPitchWheelPosition - 8192) / 8192.0;
             pitchBendFactor = std::pow(2.0, (normPitch * 2.0) / 12.0);
@@ -200,6 +218,9 @@ public:
 
         void stopNote(float, bool allowTailOff) override
         {
+            if (presetType == 4)
+                return;
+
             if (allowTailOff)
             {
                 if (tailOff == 0.0) tailOff = 1.0;
@@ -207,115 +228,201 @@ public:
             else
             {
                 clearCurrentNote();
-
-            angleDelta = 0.0;
-            baseAngleDelta = 0.0;
+                angleDelta = 0.0;
+                baseAngleDelta = 0.0;
+            }
         }
-    }
 
-    void pitchWheelMoved(int newPitchWheelValue) override
-    {
-        double normPitch = (newPitchWheelValue - 8192) / 8192.0;
-        pitchBendFactor = std::pow(2.0, (normPitch * 2.0) / 12.0);
-        angleDelta = baseAngleDelta * pitchBendFactor;
-    }
-
-    void controllerMoved(int controllerNumber, int newControllerValue) override
-    {
-        if (controllerNumber == 1)
-            modWheelDepth = newControllerValue / 127.0f;
-    }
-
-    void renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int startSample, int numSamples) override
-    {
-        if (angleDelta != 0.0)
+        void pitchWheelMoved(int newPitchWheelValue) override
         {
-            while (--numSamples >= 0)
+            double normPitch = (newPitchWheelValue - 8192) / 8192.0;
+            pitchBendFactor = std::pow(2.0, (normPitch * 2.0) / 12.0);
+            angleDelta = baseAngleDelta * pitchBendFactor;
+        }
+
+        void controllerMoved(int controllerNumber, int newControllerValue) override
+        {
+            if (controllerNumber == 1)
+                modWheelDepth = newControllerValue / 127.0f;
+        }
+
+        void renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int startSample, int numSamples) override
+        {
+            if (angleDelta != 0.0)
             {
-                float raw = 0.0f;
-                if (presetType == 1)
-                    raw = (float)std::sin(currentAngle * 2.0 * 3.14159265359);
-                else if (presetType == 2)
-                    raw = (float)(std::sin(currentAngle * 2.0 * 3.14159265359) + (0.35 + modWheelDepth * 0.65) * std::sin(currentAngle * 4.0 * 3.14159265359)) * 0.7f;
-                else
-                    raw = (float)(2.0 * std::fmod(currentAngle, 1.0) - 1.0) * (0.6f + modWheelDepth * 0.4f);
-
-                float currentSample = raw * (float)level * (tailOff > 0.0 ? (float)tailOff : 1.0f);
-
-                for (int i = outputBuffer.getNumChannels(); --i >= 0;)
-                    outputBuffer.addSample(i, startSample, currentSample);
-
-                currentAngle += angleDelta;
-                ++startSample;
-                if (tailOff > 0.0)
+                while (--numSamples >= 0)
                 {
-                    tailOff *= 0.99;
-                    if (tailOff <= 0.005)
+                    float raw = 0.0f;
+                    if (presetType == 1)
                     {
-                        clearCurrentNote();
-                        angleDelta = 0.0;
-                        baseAngleDelta = 0.0;
-                        break;
+                        raw = (float)std::sin(currentAngle * 2.0 * 3.14159265359);
+                    }
+                    else if (presetType == 2)
+                    {
+                        raw = (float)(std::sin(currentAngle * 2.0 * 3.14159265359) + (0.35 + modWheelDepth * 0.65) * std::sin(currentAngle * 4.0 * 3.14159265359)) * 0.7f;
+                    }
+                    else if (presetType == 4)
+                    {
+                        int padType = getDrumPieceType(currentMidiNote);
+                        float white = drumRng.nextFloat() * 2.0f - 1.0f;
+                        float metallic = white - lastNoiseSample;
+                        lastNoiseSample = white * 0.85f;
+
+                        if (padType == 0) // KICK
+                        {
+                            double freqMult = 0.32 + 0.68 * pitchEnv;
+                            raw = std::tanh((float)std::sin(currentAngle * 2.0 * 3.14159265359 * freqMult) * 1.8f) * (float)drumEnv;
+                            pitchEnv *= 0.9982;
+                            drumEnv *= 0.99945;
+                        }
+                        else if (padType == 1) // SNARE
+                        {
+                            float tone = (float)std::sin(currentAngle * 2.0 * 3.14159265359 * (0.65 + 0.35 * pitchEnv)) * (float)pitchEnv;
+                            raw = (tone * 0.65f + (white * 0.5f + metallic * 0.5f) * 0.85f) * (float)drumEnv;
+                            pitchEnv *= 0.9985;
+                            drumEnv *= 0.99915;
+                        }
+                        else if (padType == 2) // CLOSED HI-HAT
+                        {
+                            raw = metallic * (float)drumEnv * 0.75f;
+                            drumEnv *= 0.9968;
+                        }
+                        else if (padType == 3) // OPEN HI-HAT
+                        {
+                            raw = metallic * (float)drumEnv * 0.75f;
+                            drumEnv *= 0.99935;
+                        }
+                        else if (padType == 4 || padType == 5) // LOW / HIGH TOMS
+                        {
+                            double freqMult = 0.55 + 0.45 * pitchEnv;
+                            raw = (float)std::sin(currentAngle * 2.0 * 3.14159265359 * freqMult) * (float)drumEnv * 1.15f;
+                            pitchEnv *= 0.9988;
+                            drumEnv *= 0.99925;
+                        }
+                        else if (padType == 6) // CLAP / RIMSHOT
+                        {
+                            float burst = (drumEnv > 0.75 || (drumEnv < 0.62 && drumEnv > 0.45)) ? 1.0f : 0.45f;
+                            raw = (white * 0.6f + metallic * 0.4f) * burst * (float)drumEnv * 0.9f;
+                            drumEnv *= 0.9989;
+                        }
+                        else // CRASH CYMBAL
+                        {
+                            raw = (metallic * 0.75f + white * 0.25f) * (float)drumEnv * 0.8f;
+                            drumEnv *= 0.99972;
+                        }
+
+                        if (drumEnv <= 0.002)
+                        {
+                            clearCurrentNote();
+                            angleDelta = 0.0;
+                            baseAngleDelta = 0.0;
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        raw = (float)(2.0 * std::fmod(currentAngle, 1.0) - 1.0) * (0.6f + modWheelDepth * 0.4f);
+                    }
+
+                    float currentSample = raw * (float)level * (tailOff > 0.0 ? (float)tailOff : 1.0f);
+
+                    for (int i = outputBuffer.getNumChannels(); --i >= 0;)
+                        outputBuffer.addSample(i, startSample, currentSample);
+
+                    currentAngle += angleDelta;
+                    ++startSample;
+                    if (tailOff > 0.0)
+                    {
+                        tailOff *= 0.99;
+                        if (tailOff <= 0.005)
+                        {
+                            clearCurrentNote();
+                            angleDelta = 0.0;
+                            baseAngleDelta = 0.0;
+                            break;
+                        }
                     }
                 }
             }
         }
-    }
 
-                int presetType = 2;
-            private:
-                double currentAngle = 0.0, angleDelta = 0.0, level = 0.0, tailOff = 0.0;
-                double baseAngleDelta = 0.0;
-                double pitchBendFactor = 1.0;
-                float modWheelDepth = 0.0f;
-            };
+        int presetType = 2;
+    private:
+        static int getDrumPieceType(int note)
+        {
+            if (note == 35 || note == 36) return 0; // Kick
+            if (note == 38 || note == 40) return 1; // Snare
+            if (note == 42 || note == 44) return 2; // Closed Hat
+            if (note == 46)               return 3; // Open Hat
+            if (note == 41 || note == 43 || note == 45) return 4; // Low Tom
+            if (note == 47 || note == 48 || note == 50) return 5; // High Tom
+            if (note == 37 || note == 39) return 6; // Clap / Rim
+            if (note == 49 || note == 51 || note == 57) return 7; // Crash / Ride
+            return note % 8;
+        }
 
-            class MidiChannelStrip : public juce::Component
-            {
-            public:
-                MidiChannelStrip(int midiNumber, juce::AudioDeviceManager& dm)
-                    : midiIndex(midiNumber), deviceManager(dm)
+        double currentAngle = 0.0, angleDelta = 0.0, level = 0.0, tailOff = 0.0;
+        double baseAngleDelta = 0.0;
+        double pitchBendFactor = 1.0;
+        float modWheelDepth = 0.0f;
+        int currentMidiNote = 36;
+        double drumEnv = 0.0;
+        double pitchEnv = 0.0;
+        float lastNoiseSample = 0.0f;
+        juce::Random drumRng;
+    };
+    class MidiChannelStrip : public juce::Component
+    {
+    public:
+        MidiChannelStrip(int midiNumber, juce::AudioDeviceManager& dm)
+            : midiIndex(midiNumber), deviceManager(dm)
+        {
+            addAndMakeVisible(inSelector);
+            addAndMakeVisible(outSelector);
+            addChildComponent(instSelector);
+
+            for (int v = 0; v < 8; ++v)
+                channelSynth.addVoice(new MidawSynthVoice());
+            channelSynth.addSound(new MidawSynthSound());
+            channelSynth.setCurrentPlaybackSampleRate(48000.0);
+
+            instSelector.addItem("None (Off)", 1);
+            instSelector.addItem("Sine Pad", 2);
+            instSelector.addItem("Harmonic Keys", 3);
+            instSelector.addItem("Saw Lead", 4);
+            instSelector.addItem("Drum Kit", 5);
+            instSelector.setSelectedId(1, juce::dontSendNotification);
+            selectedInstrumentMode = 0;
+            assignedInstrumentName = "None (Off)";
+            updateSynthPreset();
+
+            instSelector.onChange = [this]()
                 {
-                    addAndMakeVisible(inSelector);
-                    addAndMakeVisible(outSelector);
-                    addChildComponent(instSelector);
-
-                    for (int v = 0; v < 8; ++v)
-                        channelSynth.addVoice(new MidawSynthVoice());
-                    channelSynth.addSound(new MidawSynthSound());
-                    channelSynth.setCurrentPlaybackSampleRate(48000.0);
-
-                    instSelector.addItem("None (Off)", 1);
-                    instSelector.addItem("Sine Pad", 2);
-                    instSelector.addItem("Harmonic Keys", 3);
-                    instSelector.addItem("Saw Lead", 4);
-                    instSelector.setSelectedId(midiNumber == 1 ? 3 : (midiNumber == 2 ? 4 : 1), juce::dontSendNotification);
                     selectedInstrumentMode = instSelector.getSelectedId() - 1;
                     assignedInstrumentName = instSelector.getText();
+                    if (selectedInstrumentMode == 0)
+                        channelSynth.allNotesOff(0, false);
+                    else
+                        updateSynthPreset();
+                    repaint();
+                };
 
-                            updateSynthPreset();
+            inSelector.onChange = [this]()
+                {
+                    int sel = inSelector.getSelectedId();
+                    if (sel == 1)
+                    {
+                        assignedInId = "";
+                        channelSynth.allNotesOff(0, false);
+                    }
+                    else if (sel == 2)
+                    {
+                        assignedInId = "ALL";
+                    }
+                    else
+                    {
+                        int idx = sel - 3;
 
-                            instSelector.onChange = [this]()
-                                {
-                                    selectedInstrumentMode = instSelector.getSelectedId() - 1;
-                                    assignedInstrumentName = instSelector.getText();
-                                    if (selectedInstrumentMode == 0)
-                                        channelSynth.allNotesOff(0, false);
-                                    else
-                                        updateSynthPreset();
-                                    repaint();
-                                };
-
-                            inSelector.onChange = [this]()
-                                {
-                                    int sel = inSelector.getSelectedId();
-                                    if (sel == 1)
-                                    {
-                                        assignedInId = "ALL";
-                                    }
-                                    else
-                                    {
-                                        int idx = sel - 3;
                                         auto inputs = juce::MidiInput::getAvailableDevices();
                                         if (idx >= 0 && idx < inputs.size())
                                         {
@@ -416,7 +523,7 @@ public:
                             for (int v = 0; v < channelSynth.getNumVoices(); ++v)
                             {
                                 if (auto* voice = dynamic_cast<MidawSynthVoice*>(channelSynth.getVoice(v)))
-                                    voice->presetType = juce::jlimit(1, 3, selectedInstrumentMode);
+                                    voice->presetType = juce::jlimit(1, 4, selectedInstrumentMode);
                             }
                         }
 

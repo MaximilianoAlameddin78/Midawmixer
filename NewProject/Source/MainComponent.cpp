@@ -1134,8 +1134,9 @@ void MainComponent::rebuildBrowserList()
 
     if (browserCategory == 0 || browserCategory == 3)
     {
-        tryAdd("[Drums] Acoustic Kit", 1);
-        tryAdd("[Drums] 808 Electronic Kit", 3);
+        tryAdd("[Drums] Acoustic Kit", 4);
+        tryAdd("[Drums] 808 Electronic Kit", 4);
+
     }
 
     if (browserCategory == 0 || browserCategory == 4)
