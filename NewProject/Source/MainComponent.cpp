@@ -7,7 +7,7 @@ MainComponent::MainComponent() : AudioAppComponent()
     addAndMakeVisible(*menuBar);
     formatManager.registerBasicFormats();
 
-    setAudioChannels(0, 2);
+    setAudioChannels(2, 2);
     for (const auto& input : juce::MidiInput::getAvailableDevices())
     {
         deviceManager.setMidiInputDeviceEnabled(input.identifier, true);
@@ -561,7 +561,7 @@ void MainComponent::handleIncomingMidiMessage(juce::MidiInput* source, const juc
     keyboardState.processNextMidiEvent(message);
 
     juce::String sourceId = source->getIdentifier();
-    if (motorizedMidiOut != nullptr && processMotorizedSurfaceInput(message))
+    if (motorizedMidiOut != nullptr && processMotorizedSurfaceInput(message)) 
         return;
 
     if (processDmxMidiTrigger(message))
@@ -1117,18 +1117,32 @@ void MainComponent::rebuildBrowserList()
             }
         };
 
+    // Categoria 0 = Todos | 1 = Pianos | 2 = Sintetizadores | 3 = Baterias | 4 = VST3
     if (browserCategory == 0 || browserCategory == 1)
     {
-        tryAdd("[Nativo] Pad Suave", 1);
-        tryAdd("[Nativo] E-Piano", 2);
-        tryAdd("[Nativo] Synth Lead", 3);
+        tryAdd("[Piano] Grand Piano", 2);
+        tryAdd("[Piano] Electric Piano (Rhodes)", 2);
+        tryAdd("[Piano] Clavinet Keys", 2);
     }
 
     if (browserCategory == 0 || browserCategory == 2)
     {
+        tryAdd("[Synth] Pad Atmosferico", 1);
+        tryAdd("[Synth] Saw Lead Solista", 3);
+        tryAdd("[Synth] Bass Analogico", 3);
+    }
+
+    if (browserCategory == 0 || browserCategory == 3)
+    {
+        tryAdd("[Drums] Acoustic Kit", 1);
+        tryAdd("[Drums] 808 Electronic Kit", 3);
+    }
+
+    if (browserCategory == 0 || browserCategory == 4)
+    {
         auto types = knownPlugins.getTypes();
         for (int i = 0; i < types.size(); ++i)
-            tryAdd(types[i].manufacturerName + " - " + types[i].name, 100 + i);
+            tryAdd("[VST3] " + types[i].manufacturerName + " - " + types[i].name, 100 + i);
     }
 
     browserListBox.updateContent();
@@ -1141,14 +1155,37 @@ void MainComponent::loadBrowserItem(int row)
         return;
 
     int typeId = browserItemTypes[row];
+    juce::String itemName = browserItemNames[row];
+
+    // Determinar a que canal MIDI asignar (canal activo o Canal MIDI 1 por defecto)
+    int targetMidiIdx = 0;
+    for (int i = 0; i < midiChannels.size(); ++i)
+    {
+        if (midiChannels[i]->soloButton.getToggleState() || midiChannels[i]->recButton.getToggleState())
+        {
+            targetMidiIdx = i;
+            break;
+        }
+    }
+
     if (typeId < 100)
     {
         activePluginWindow.reset();
         activeVstPlugin.reset();
-        loadedPluginName = browserItemNames[row];
+        loadedPluginName = itemName;
+
         for (int i = 0; i < nativeSynth.getNumVoices(); ++i)
             if (auto* v = dynamic_cast<MidawSynthVoice*>(nativeSynth.getVoice(i)))
                 v->presetType = typeId;
+
+        if (!midiChannels.isEmpty() && targetMidiIdx < midiChannels.size())
+
+        {
+            juce::String cleanLabel = itemName.fromFirstOccurrenceOf("] ", false, false);
+            if (cleanLabel.isEmpty()) cleanLabel = itemName;
+            midiChannels[targetMidiIdx]->setAssignedInstrument(typeId + 1, cleanLabel);
+        }
+
         repaint();
         return;
     }
@@ -1167,6 +1204,10 @@ void MainComponent::loadBrowserItem(int row)
             instance->prepareToPlay(sr, bs);
             activeVstPlugin = std::move(instance);
             loadedPluginName = types[pluginIdx].name;
+            if (!midiChannels.isEmpty() && targetMidiIdx < midiChannels.size())
+                midiChannels[targetMidiIdx]->setAssignedInstrument(3, loadedPluginName);
+
+            
 
             if (activeVstPlugin->hasEditor())
                 activePluginWindow = std::make_unique<PluginEditorWindow>(loadedPluginName, activeVstPlugin->createEditorIfNeeded());
@@ -1179,6 +1220,9 @@ void MainComponent::loadBrowserItem(int row)
         }
     }
 }
+
+    
+
 
 void MainComponent::scanForVst3Plugins()
 {
