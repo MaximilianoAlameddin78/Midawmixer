@@ -558,6 +558,8 @@ void MainComponent::triggerInternalSynths(const juce::MidiMessage& message, floa
 void MainComponent::handleIncomingMidiMessage(juce::MidiInput* source, const juce::MidiMessage& message)
 {
     if (source == nullptr) return;
+    keyboardState.processNextMidiEvent(message);
+
     juce::String sourceId = source->getIdentifier();
     if (motorizedMidiOut != nullptr && processMotorizedSurfaceInput(message))
         return;
@@ -688,7 +690,7 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
 
 
     float masterVol = (float)masterVolumeSlider.getValue();
-
+    
     bool anySolo = false;
     for (auto* ch : audioChannels)
     {
@@ -732,28 +734,17 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
                     w = ch->processSampleWithEq(w);
                     float pan = (float)ch->panSlider.getValue();
                     dryLeft += w * vol * (1.0f - pan);
+
                     dryRight += w * vol * pan;
                 }
-
-                
-
-                
-
-     
-        
+            }
+        }
 
         float clickSample = 0.0f;
         if (isPlaying && metronomeBtn.getToggleState())
         {
             int samplesPerBeat = (int)((60.0 / bpmSlider.getValue()) * blindRate);
-            if (metroSampleCounter == 0)
-            {
-                metroBeepSamplesLeft = (int)(0.035 * blindRate);
-                metroPhase = 0.0;
-            }
-            metroSampleCounter = (metroSampleCounter + 1) % std::max(1, samplesPerBeat);
 
-            if (metroBeepSamplesLeft > 0)
             {
                 clickSample = (float)std::sin(metroPhase * 2.0 * 3.14159265359) * 0.25f;
                 metroPhase += 1000.0 / blindRate;
@@ -822,8 +813,8 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
     currentLevelRight = std::max(maxRight, currentLevelRight * 0.85f);
     }
 
-}
-    }
+
+    
 
 
 void MainComponent::releaseResources() { masterReverb.reset(); }
