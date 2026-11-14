@@ -32,21 +32,26 @@ public:
     public:
         MainWindow(juce::String name)
             : DocumentWindow(name,
-                juce::Colours::darkgrey,
-                DocumentWindow::allButtons)
+                juce::Colour(0xff181a1f),
+                DocumentWindow::minimiseButton | DocumentWindow::maximiseButton | DocumentWindow::closeButton)
         {
-            setUsingNativeTitleBar(true);
-            setContentOwned(new MainComponent(), true);
+                setUsingNativeTitleBar(false);
+                setTitleBarButtonsRequired(DocumentWindow::minimiseButton | DocumentWindow::maximiseButton | DocumentWindow::closeButton, false);
+                setTitleBarHeight(28);
+                setContentOwned(new MainComponent(), true);
 
 #if JUCE_IOS || JUCE_ANDROID
-            setFullScreen(true);
+                setFullScreen(true);
 #else
-            setResizable(true, true);
-            centreWithSize(getWidth(), getHeight());
+                setResizable(true, true);
+                setResizeLimits(800, 520, 3840, 2160);
+                auto area = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()->userArea;
+                setBounds(area.reduced(24, 16));
 #endif
 
-            setVisible(true);
+                setVisible(true);
         }
+
 
         void closeButtonPressed() override
         {
