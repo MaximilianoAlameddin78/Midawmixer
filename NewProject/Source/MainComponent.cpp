@@ -160,6 +160,9 @@ MainComponent::MainComponent() : AudioAppComponent()
             timelineToggleBtn.setColour(juce::TextButton::buttonColourId, showTimelineView ? juce::Colours::deepskyblue : juce::Colour(0xff232323));
             resized();
         };
+    addAndMakeVisible(pianoRollBtn);
+    pianoRollBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2b5876));
+    pianoRollBtn.onClick = [this]() { openPianoRollEditor(); };
 
 
     addAndMakeVisible(scanVstBtn);
@@ -1242,7 +1245,8 @@ void MainComponent::resized()
     if (menuBar != nullptr)
         menuBar->setBounds(0, 0, getWidth(), menuH);
     timelineToggleBtn.setBounds(434, menuH + 10, 82, 30);
-
+    pianoRollBtn.setBounds(524, menuH + 10, 96, 30);
+    
     // Capsula 1: Transporte
     playButton.setBounds(20, menuH + 10, 62, 30);
     stopButton.setBounds(88, menuH + 10, 62, 30);
@@ -1891,4 +1895,54 @@ void MainComponent::exportProjectToWav()
                 "Exportacion Completada",
                 "Tu mezcla WAV se exporto correctamente en:\n" + outFile.getFullPathName());
         });
+}
+void MainComponent::openPianoRollEditor()
+{
+    TimelineClip* clipToEdit = nullptr;
+    for (int i = (int)arrangementTimeline.clips.size() - 1; i >= 0; --i)
+    {
+        if (arrangementTimeline.clips[i].isMidi)
+        {
+            clipToEdit = &arrangementTimeline.clips[i];
+            break;
+        }
+    }
+
+    if (clipToEdit == nullptr)
+    {
+        TimelineClip newClip;
+        newClip.trackIndex = audioChannels.size();
+        newClip.isMidi = true;
+        newClip.name = "Patron MIDI 1";
+        newClip.colour = juce::Colour(0xff00d285);
+        newClip.startSec = 0.0;
+        newClip.durationSec = (60.0 / juce::jlimit(40.0, 260.0, bpmSlider.getValue())) * 16.0;
+        newClip.maxDurationSec = newClip.durationSec;
+        arrangementTimeline.clips.push_back(newClip);
+        arrangementTimeline.repaint();
+        clipToEdit = &arrangementTimeline.clips.back();
+    }
+
+    auto* editor = new PianoRollEditor();
+    editor->targetClip = clipToEdit;
+    editor->targetSynth = &nativeSynth;
+    editor->bpm = bpmSlider.getValue();
+    editor->onNotesChanged = [this]() { arrangementTimeline.repaint(); };
+    editor->setSize(860, 480);
+
+    class PianoRollWin : public juce::DocumentWindow
+    {
+    public:
+        PianoRollWin() : DocumentWindow("Midawmixer - Piano Roll Editor", juce::Colour(0xff16181d), DocumentWindow::closeButton | DocumentWindow::minimiseButton)
+        {
+            setUsingNativeTitleBar(false);
+            setTitleBarHeight(26);
+        }
+        void closeButtonPressed() override { setVisible(false); }
+    };
+
+    pianoRollWindow = std::make_unique<PianoRollWin>();
+    pianoRollWindow->setContentOwned(editor, true);
+    pianoRollWindow->centreWithSize(860, 480);
+    pianoRollWindow->setVisible(true);
 }

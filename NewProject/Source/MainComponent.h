@@ -1437,8 +1437,14 @@ private:
 
     int selectedMidiTrackIndex = 0;
 
-}
-;
 
 
-  
+
+
+juce::TextButton pianoRollBtn{ "PIANO ROLL" };
+std::unique_ptr<juce::DocumentWindow> pianoRollWindow;
+void openPianoRollEditor();
+
+JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
+};
+
