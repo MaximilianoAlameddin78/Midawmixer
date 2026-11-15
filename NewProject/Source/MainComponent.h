@@ -826,6 +826,151 @@ struct TimelineClip
     struct NoteVisual { double startRel; double dur; int note; };
     std::vector<NoteVisual> midiNotes; // Notas visuales para MIDI
 };
+class PianoRollEditor : public juce::Component
+{
+public:
+    TimelineClip* targetClip = nullptr;
+    juce::Synthesiser* targetSynth = nullptr;
+    std::function<void()> onNotesChanged;
+    double bpm = 120.0;
+
+    static constexpr int lowestNote = 36;  // C2
+    static constexpr int highestNote = 84; // C6
+    static constexpr int numKeys = highestNote - lowestNote + 1;
+    static constexpr int keyWidth = 52;
+    static constexpr int stepsPerBeat = 4; // Semicorcheas
+    static constexpr int totalBeats = 16;  // 4 compases
+
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(juce::Colour(0xff16181d));
+
+        int gridX = keyWidth;
+        int gridW = getWidth() - gridX;
+        int gridH = getHeight();
+        float rowH = (float)gridH / (float)numKeys;
+        int totalSteps = totalBeats * stepsPerBeat;
+        float colW = (float)gridW / (float)totalSteps;
+
+        // 1. Filas horizontales y teclado izquierdo
+        for (int i = 0; i < numKeys; ++i)
+        {
+            int midiNote = highestNote - i;
+            float y = i * rowH;
+            int pc = midiNote % 12;
+            bool isBlack = (pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10);
+
+            // Fondo de fila en la grilla
+            g.setColour(isBlack ? juce::Colour(0xff1c1f26) : juce::Colour(0xff232730));
+            g.fillRect((float)gridX, y, (float)gridW, rowH);
+            g.setColour(juce::Colour(0xff121418));
+            g.drawHorizontalLine((int)y, (float)gridX, (float)getWidth());
+
+            // Tecla del piano a la izquierda
+            g.setColour(isBlack ? juce::Colour(0xff111215) : juce::Colour(0xffe8ecf2));
+            g.fillRect(0.0f, y, (float)keyWidth - 2.0f, rowH - 1.0f);
+
+            if (pc == 0) // Etiqueta en cada Do (C)
+            {
+                g.setColour(juce::Colours::black);
+                g.setFont(10.0f);
+                int oct = (midiNote / 12) - 1;
+                g.drawText("C" + juce::String(oct), 4, (int)y, keyWidth - 8, (int)rowH, juce::Justification::centredRight);
+            }
+        }
+
+        // 2. Lineas verticales de compas y tiempo
+        for (int s = 0; s <= totalSteps; ++s)
+        {
+            float x = gridX + s * colW;
+            if (s % 16 == 0)
+                g.setColour(juce::Colour(0xff5b6475));
+            else if (s % 4 == 0)
+                g.setColour(juce::Colour(0xff3a404c));
+            else
+                g.setColour(juce::Colour(0xff262a33));
+
+            g.drawVerticalLine((int)x, 0.0f, (float)gridH);
+        }
+
+        // 3. Dibujar las notas MIDI del clip
+        if (targetClip != nullptr)
+        {
+            double beatSec = 60.0 / juce::jlimit(40.0, 260.0, bpm);
+            double stepSec = beatSec / (double)stepsPerBeat;
+
+            for (const auto& n : targetClip->midiNotes)
+            {
+                if (n.note < lowestNote || n.note > highestNote) continue;
+                int row = highestNote - n.note;
+                float y = row * rowH + 1.0f;
+                float x = gridX + (float)(n.startRel / stepSec) * colW;
+                float w = juce::jmax(colW * 0.85f, (float)(n.dur / stepSec) * colW);
+
+                g.setColour(juce::Colour(0xff00d285));
+                g.fillRoundedRectangle(x, y, w, juce::jmax(4.0f, rowH - 2.0f), 3.0f);
+                g.setColour(juce::Colours::white.withAlpha(0.75f));
+                g.drawRoundedRectangle(x, y, w, juce::jmax(4.0f, rowH - 2.0f), 3.0f, 1.0f);
+            }
+        }
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        int gridX = keyWidth;
+        int gridH = getHeight();
+        float rowH = (float)gridH / (float)numKeys;
+        int row = juce::jlimit(0, numKeys - 1, (int)(e.y / rowH));
+        int midiNote = highestNote - row;
+
+        // Vista previa de sonido al tocar tecla o nota
+        if (targetSynth != nullptr)
+        {
+            targetSynth->noteOn(1, midiNote, 0.85f);
+            juce::Timer::callAfterDelay(220, [synth = targetSynth, midiNote]() {
+                if (synth != nullptr) synth->noteOff(1, midiNote, 0.8f, true);
+                });
+        }
+
+        if (e.x < gridX || targetClip == nullptr)
+            return;
+
+        int gridW = getWidth() - gridX;
+        int totalSteps = totalBeats * stepsPerBeat;
+        float colW = (float)gridW / (float)totalSteps;
+        int step = juce::jlimit(0, totalSteps - 1, (int)((e.x - gridX) / colW));
+
+        double beatSec = 60.0 / juce::jlimit(40.0, 260.0, bpm);
+        double stepSec = beatSec / (double)stepsPerBeat;
+        double clickTime = step * stepSec;
+
+        // Buscar si ya existe una nota en esa posicion para borrarla
+        for (int i = (int)targetClip->midiNotes.size() - 1; i >= 0; --i)
+        {
+            const auto& n = targetClip->midiNotes[i];
+            if (n.note == midiNote && clickTime >= n.startRel - 0.001 && clickTime < n.startRel + n.dur - 0.001)
+            {
+                targetClip->midiNotes.erase(targetClip->midiNotes.begin() + i);
+                repaint();
+                if (onNotesChanged) onNotesChanged();
+                return;
+            }
+        }
+
+        // Si es clic izquierdo en celda vacia, agregar nueva nota de 1 negra (1 beat)
+        if (e.mods.isLeftButtonDown())
+        {
+            TimelineClip::NoteVisual nv;
+            nv.startRel = clickTime;
+            nv.dur = beatSec;
+            nv.note = midiNote;
+            targetClip->midiNotes.push_back(nv);
+            targetClip->durationSec = juce::jmax(targetClip->durationSec, nv.startRel + nv.dur);
+            repaint();
+            if (onNotesChanged) onNotesChanged();
+        }
+    }
+};
 
 class ArrangementTimeline : public juce::Component
 {
@@ -947,6 +1092,10 @@ public:
             g.setFont(9.5f);
             g.drawText(c.name, x + 5, y + 1, cw - 8, 12, juce::Justification::centredLeft);
             g.restoreState();
+            juce::TextButton pianoRollBtn{ "PIANO ROLL" };
+            std::unique_ptr<juce::DocumentWindow> pianoRollWindow;
+            void openPianoRollEditor();
+
         }
 
         // Cabezal de reproduccion (Playhead)
@@ -1175,6 +1324,8 @@ private:
 
 
     void saveSessionToFile();
+    void exportProjectToWav();
+
     void loadSessionFromFile();
     std::unique_ptr<juce::FileChooser> fileChooser;
 
@@ -1186,6 +1337,11 @@ private:
 
     std::vector<float> delayBufferLeft, delayBufferRight;
     int delayWritePosition = 0;
+    juce::Slider chorusDepthSlider, masterDriveSlider;
+    std::vector<float> chorusBufferLeft, chorusBufferRight;
+    int chorusWritePos = 0;
+    double chorusLfoPhase = 0.0;
+    float compEnvelope = 0.0f;
 
     juce::Slider masterVolumeSlider;
     float currentLevelLeft = 0.0f, currentLevelRight = 0.0f;

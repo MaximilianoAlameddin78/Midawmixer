@@ -42,6 +42,8 @@ MainComponent::MainComponent() : AudioAppComponent()
     setupFxKnob(reverbMixSlider, 0.0, 1.0, 0.0, juce::Colours::mediumpurple);
     setupFxKnob(delayTimeSlider, 0.05, 1.0, 0.35, juce::Colours::mediumspringgreen);
     setupFxKnob(delayFeedbackSlider, 0.0, 0.85, 0.0, juce::Colours::mediumspringgreen);
+    setupFxKnob(chorusDepthSlider, 0.0, 1.0, 0.0, juce::Colours::deepskyblue);
+    setupFxKnob(masterDriveSlider, 0.0, 1.0, 0.15, juce::Colours::orange);
 
     addAndMakeVisible(masterVolumeSlider);
     masterVolumeSlider.setSliderStyle(juce::Slider::LinearVertical);
@@ -201,6 +203,8 @@ MainComponent::MainComponent() : AudioAppComponent()
     addAudioBtn.onClick = [this] { addAudioChannel(659.0); };
     addMidiBtn.onClick = [this] { addMidiChannel(); };
     saveBtn.onClick = [this] { saveSessionToFile(); };
+    void exportProjectToWav();
+
     loadBtn.onClick = [this] { loadSessionFromFile(); };
 
     recWavButton.onClick = [this]
@@ -244,13 +248,7 @@ void MainComponent::startMasterRecording()
     recordedAudioBuffer.setSize(2, 48000 * 60 * 3);
     recordedAudioBuffer.clear();
     recordedSamplesCount = 0;
-    double sr = deviceManager.getCurrentAudioDevice() != nullptr ? deviceManager.getCurrentAudioDevice()->getCurrentSampleRate() : 48000.0;
-    for (auto* ch : audioChannels)
-        if (ch->recButton.getToggleState())
-            ch->startTrackRecording(sr);
-
-    recordedMidiSeq.clear();
-    masterRecStartTime = juce::Time::getMillisecondCounterHiRes() * 0.001;
+  
 
     isRecordingMaster = true;
     recWavButton.setButtonText("REC...");
@@ -423,6 +421,8 @@ juce::PopupMenu MainComponent::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addItem(6, "Abrir Carpeta de Grabaciones...");
 
         menu.addItem(5, "Salir");
+        menu.addItem(7, "Exportar Proyecto (WAV)...");
+
     }
     else if (topLevelMenuIndex == 1)
     {
@@ -457,6 +457,8 @@ void MainComponent::menuItemSelected(int menuItemID, int)
     case 1:  newProject(); break;
     case 2:  loadSessionFromFile(); break;
     case 3:  saveSessionToFile(); break;
+    case 7: exportProjectToWav(); break;
+
     case 501: applyTheme(1); break;
     case 502: applyTheme(2); break;
     case 503: applyTheme(3); break;
@@ -909,8 +911,60 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
             delayWritePosition = (delayWritePosition + 1) % bufferSize;
         }
             
-        if (leftChannel != nullptr) leftChannel[sampleIndex] = dryLeft + (delayedLeft * 0.6f) + clickSample;
-        if (rightChannel != nullptr) rightChannel[sampleIndex] = dryRight + (delayedRight * 0.6f) + clickSample;
+        float outL = dryLeft + (delayedLeft * 0.6f);
+        float outR = dryRight + (delayedRight * 0.6f);
+
+        // --- CHORUS ESTEREO MODULADO ---
+        float chorusMix = (float)chorusDepthSlider.getValue();
+        if (chorusMix > 0.001f && !chorusBufferLeft.empty())
+        {
+            int cSize = (int)chorusBufferLeft.size();
+            chorusLfoPhase += 1.35 / blindRate;
+            if (chorusLfoPhase >= 1.0) chorusLfoPhase -= 1.0;
+
+            float lfoL = 0.5f + 0.5f * (float)std::sin(chorusLfoPhase * 2.0 * 3.14159265359);
+            float lfoR = 0.5f + 0.5f * (float)std::cos(chorusLfoPhase * 2.0 * 3.14159265359);
+
+            int modDelayL = (int)(blindRate * (0.008f + 0.012f * lfoL));
+            int modDelayR = (int)(blindRate * (0.008f + 0.012f * lfoR));
+
+            float cWetL = chorusBufferLeft[(chorusWritePos - modDelayL + cSize) % cSize];
+            float cWetR = chorusBufferRight[(chorusWritePos - modDelayR + cSize) % cSize];
+
+            chorusBufferLeft[chorusWritePos] = outL;
+            chorusBufferRight[chorusWritePos] = outR;
+            chorusWritePos = (chorusWritePos + 1) % cSize;
+
+            outL = outL * (1.0f - 0.35f * chorusMix) + cWetL * (0.65f * chorusMix);
+            outR = outR * (1.0f - 0.35f * chorusMix) + cWetR * (0.65f * chorusMix);
+        }
+
+        // --- DRIVE CALIDO + COMPRESOR / LIMITADOR MASTER ---
+        float driveAmt = (float)masterDriveSlider.getValue();
+        if (driveAmt > 0.001f)
+        {
+            float preGain = 1.0f + driveAmt * 2.6f;
+            outL = std::tanh(outL * preGain);
+            outR = std::tanh(outR * preGain);
+
+            float peak = juce::jmax(std::abs(outL), std::abs(outR));
+            float coeff = (peak > compEnvelope) ? 0.008f : 0.0004f;
+            compEnvelope += coeff * (peak - compEnvelope);
+
+            float thresh = 0.65f - driveAmt * 0.25f;
+            if (compEnvelope > thresh && compEnvelope > 0.0001f)
+            {
+                float targetGain = thresh + (compEnvelope - thresh) * 0.35f;
+                float compGain = targetGain / compEnvelope;
+                outL *= compGain;
+                outR *= compGain;
+            }
+        }
+
+        if (leftChannel != nullptr) leftChannel[sampleIndex] = outL + clickSample;
+        if (rightChannel != nullptr) rightChannel[sampleIndex] = outR + clickSample;
+
+
 
     }
 
@@ -1243,13 +1297,17 @@ void MainComponent::resized()
     
     midiKeyboard.setBounds(15, getHeight() - keyH - 5, getWidth() - 30, keyH);
 
-    int fxX = getWidth() - 245;
-    int fxW = 100;
-    reverbSizeSlider.setBounds(fxX + 14, chY + 46, fxW - 28, 72);
-    reverbMixSlider.setBounds(fxX + 14, chY + 139, fxW - 28, 72);
-    delayTimeSlider.setBounds(fxX + 14, chY + 249, fxW - 28, 72);
-    delayFeedbackSlider.setBounds(fxX + 14, chY + 342, fxW - 28, 72);
-
+    
+    int fxX = getWidth() - 258;
+    int fxW = 114;
+    int colW = (fxW - 10) / 2;
+    int rowH = 74;
+    reverbSizeSlider.setBounds(fxX + 4, chY + 42, colW, rowH);
+    reverbMixSlider.setBounds(fxX + 6 + colW, chY + 42, colW, rowH);
+    delayTimeSlider.setBounds(fxX + 4, chY + 42 + rowH + 14, colW, rowH);
+    delayFeedbackSlider.setBounds(fxX + 6 + colW, chY + 42 + rowH + 14, colW, rowH);
+    chorusDepthSlider.setBounds(fxX + 4, chY + 42 + (rowH + 14) * 2, colW, rowH);
+    masterDriveSlider.setBounds(fxX + 6 + colW, chY + 42 + (rowH + 14) * 2, colW, rowH);
     int masterX = getWidth() - 135;
     masterVolumeSlider.setBounds(masterX + 10, chY + 50, 50, chH - 75);
     if (audioSetupComp != nullptr && showAudioSetup)
@@ -1259,14 +1317,19 @@ void MainComponent::resized()
         audioSetupComp->setBounds((getWidth() - sw) / 2, (getHeight() - sh) / 2, sw, sh);
         audioSetupComp->toFront(false);
     }
-
 }
+
 void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
 {
     masterReverb.setSampleRate(sampleRate);
     nativeSynth.setCurrentPlaybackSampleRate(sampleRate);
 
+    int maxChorusSamples = (int)(sampleRate * 0.05);
+    chorusBufferLeft.assign(juce::jmax(64, maxChorusSamples), 0.0f);
+    chorusBufferRight.assign(juce::jmax(64, maxChorusSamples), 0.0f);
+    chorusWritePos = 0;
 }
+
 
 //==============================================================================
 // Logica del Browser estilo Ableton + Escaneo y Carga de Plugins VST3
@@ -1752,4 +1815,80 @@ bool MainComponent::processDmxMidiTrigger(const juce::MidiMessage& message)
     }
 
     return false;
+}
+void MainComponent::exportProjectToWav()
+{
+    auto chooser = std::make_shared<juce::FileChooser>(
+        "Exportar Mezcla Completa (WAV Estereo)",
+        juce::File::getSpecialLocation(juce::File::userDesktopDirectory).getChildFile("Midawmixer_Mix.wav"),
+        "*.wav");
+
+    chooser->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
+        [this, chooser](const juce::FileChooser& fc)
+        {
+            auto outFile = fc.getResult();
+            if (outFile == juce::File())
+                return;
+
+            if (!outFile.hasFileExtension(".wav"))
+                outFile = outFile.withFileExtension(".wav");
+
+            double sr = deviceManager.getCurrentAudioDevice() != nullptr
+                ? deviceManager.getCurrentAudioDevice()->getCurrentSampleRate()
+                : 48000.0;
+
+            double bpm = juce::jlimit(40.0, 260.0, bpmSlider.getValue());
+            double barSec = (60.0 / bpm) * 4.0;
+            double totalSec = barSec * 8.0;
+
+            for (const auto& clip : arrangementTimeline.clips)
+                for (const auto& clip : arrangementTimeline.clips)
+                    totalSec = juce::jmax(totalSec, clip.startSec + clip.durationSec + 2.0);
+
+
+            int totalSamples = (int)(totalSec * sr);
+            const int blockSize = 512;
+
+            outFile.deleteFile();
+            std::unique_ptr<juce::FileOutputStream> fileStream(outFile.createOutputStream());
+            if (fileStream == nullptr)
+                return;
+
+            juce::WavAudioFormat wavFormat;
+            std::unique_ptr<juce::AudioFormatWriter> writer(
+                wavFormat.createWriterFor(fileStream.get(), sr, 2, 24, {}, 0));
+
+            if (writer == nullptr)
+                return;
+
+            fileStream.release();
+
+            bool wasPlaying = isPlaying;
+            double prevPlayhead = arrangementTimeline.playheadSec;
+            arrangementTimeline.playheadSec = 0.0;
+            isPlaying = true;
+
+            juce::AudioBuffer<float> renderBuffer(2, blockSize);
+            juce::AudioSourceChannelInfo info(&renderBuffer, 0, blockSize);
+
+            int rendered = 0;
+            while (rendered < totalSamples)
+            {
+                int n = juce::jmin(blockSize, totalSamples - rendered);
+                info.numSamples = n;
+                renderBuffer.clear();
+                getNextAudioBlock(info);
+                writer->writeFromAudioSampleBuffer(renderBuffer, 0, n);
+                rendered += n;
+            }
+
+            isPlaying = wasPlaying;
+            arrangementTimeline.playheadSec = prevPlayhead;
+            writer.reset();
+
+            juce::AlertWindow::showMessageBoxAsync(
+                juce::AlertWindow::InfoIcon,
+                "Exportacion Completada",
+                "Tu mezcla WAV se exporto correctamente en:\n" + outFile.getFullPathName());
+        });
 }
