@@ -656,34 +656,212 @@ void MainComponent::triggerInternalSynths(const juce::MidiMessage& message, floa
             return;
 
         keyboardState.processNextMidiEvent(message);
-        
+        // --- AUTO-MAPEO MIDI UNIVERSAL (FADERS, KNOBS Y BOTONES DE CUALQUIER CONTROLADOR) ---
+        {
+            bool isMmcPlay = false, isMmcStop = false, isMmcRec = false;
+            if (message.isSysEx() && message.getSysExDataSize() >= 4)
+            {
+                const auto* d = message.getSysExData();
+                if (d[0] == 0x7f && d[1] == 0x06)
+                {
+                    if (d[2] == 0x01 || d[2] == 0x09) isMmcStop = true;
+                    else if (d[2] == 0x02 || d[2] == 0x03) isMmcPlay = true;
+                    else if (d[2] == 0x06) isMmcRec = true;
+                }
+            }
+
+            if (message.isMidiStart() || message.isMidiContinue() || isMmcPlay)
+            {
+                juce::MessageManager::callAsync([this]() { if (!isPlaying) playButton.triggerClick(); });
+                return;
+            }
+            if (message.isMidiStop() || isMmcStop)
+            {
+                juce::MessageManager::callAsync([this]() { stopButton.triggerClick(); });
+                return;
+            }
+            if (isMmcRec)
+            {
+                juce::MessageManager::callAsync([this]() { recWavButton.triggerClick(); });
+                return;
+            }
+
+            // Deteccion universal de botones de funcion (APC Mini, Launchpad, Arturia, Korg, Genericos USB)
+            juce::String devName = source->getName().toLowerCase();
+            bool isControllerPort = devName.contains("apc") || devName.contains("launchpad")
+                || devName.contains("push") || devName.contains("pad")
+                || devName.contains("kontrol") || devName.contains("mpk")
+                || devName.contains("minilab") || devName.contains("keylab")
+                || devName.contains("midiin2") || devName.contains("daw");
+
+            int noteNum = message.getNoteNumber();
+            int vel = message.getVelocity();
+            bool isSwitchVelocity = (vel == 127 || vel == 1);
+
+            bool isFunctionNote = message.isNoteOn(false) && (
+                noteNum < 36 ||
+                noteNum >= 96 ||
+                (noteNum >= 64 && noteNum <= 89 && (isControllerPort || isSwitchVelocity))
+                );
+
+            // Botones de funcion que envian Notas (APC Mini filas/columnas 64-122, Shift, Mackie, etc.)
+            if (isFunctionNote)
+            {
+                int ch = message.getChannel();
+                int btnKey = 10000 + (ch * 200) + noteNum;
+
+                
+
+
+                juce::MessageManager::callAsync([this, btnKey]()
+                    {
+                        int slot = autoMappedButtons.indexOf(btnKey);
+                        if (slot < 0)
+                        {
+                            autoMappedButtons.add(btnKey);
+                            slot = autoMappedButtons.size() - 1;
+                            saveAutoMap();
+                        }
+
+                        if (slot == 0) playButton.triggerClick();
+                        else if (slot == 1) stopButton.triggerClick();
+                        else if (slot == 2) recWavButton.triggerClick();
+                        else if (slot == 3) arpModeBtn.triggerClick();
+                        else if (slot == 4) arrangementTimeline.playheadSec = 0.0;
+                        else
+                        {
+                            int chIdx = slot - 5;
+                            if (chIdx < audioChannels.size())
+                                audioChannels[chIdx]->muteButton.triggerClick();
+                            else if (chIdx - audioChannels.size() < midiChannels.size())
+                                midiChannels[chIdx - audioChannels.size()]->muteButton.triggerClick();
+                        }
+                    });
+                return;
+            }
+
+
+                // Control Change (CC): Auto-aprendizaje universal de Faders, Knobs y Botones CC
+                if (message.isController())
+                {
+                    int cc = message.getControllerNumber();
+                    int val = message.getControllerValue();
+                    int ch = message.getChannel();
+                    float norm = val / 127.0f;
+                    int ccKey = (ch * 200) + cc;
+
+                    if (cc == 64) return; // Pedal sustain libre para instrumentos
+
+                    juce::MessageManager::callAsync([this, cc, val, norm, ccKey]()
+                        {
+                            // 1. Transporte CC estandar (115-119)
+                            if (cc >= 115 && cc <= 119)
+                            {
+                                if (val >= 64)
+                                {
+                                    if (cc == 115) arrangementTimeline.playheadSec = 0.0;
+                                    else if (cc == 116) stopButton.triggerClick();
+                                    else if (cc == 117) { if (!isPlaying) playButton.triggerClick(); }
+                                    else if (cc == 118) recWavButton.triggerClick();
+                                    else if (cc == 119) arpModeBtn.triggerClick();
+                                }
+                                return;
+                            }
+
+                            // 2. Controles dedicados universales (Master, Filtro, Reverb)
+                            if (cc == 7) { masterVolumeSlider.setValue(norm * 1.5, juce::sendNotificationSync); return; }
+                            if (cc == 74) { filterCutoffSlider.setValue(80.0 + std::pow(norm, 2.5) * 17920.0, juce::sendNotificationSync); return; }
+                            if (cc == 71) { filterResonanceSlider.setValue(norm * 0.95, juce::sendNotificationSync); return; }
+                            if (cc == 91) { reverbMixSlider.setValue(norm, juce::sendNotificationSync); return; }
+
+                            // 3. Si ya fue aprendido como Boton CC, ejecutar su funcion al presionar (val >= 64)
+                            int btnSlot = autoMappedButtons.indexOf(ccKey);
+                            if (btnSlot >= 0)
+                            {
+                                if (val >= 64)
+                                {
+                                    if (btnSlot == 0) playButton.triggerClick();
+                                    else if (btnSlot == 1) stopButton.triggerClick();
+                                    else if (btnSlot == 2) recWavButton.triggerClick();
+                                    else if (btnSlot == 3) arpModeBtn.triggerClick();
+                                    else if (btnSlot == 4) arrangementTimeline.playheadSec = 0.0;
+                                    else
+                                    {
+                                        int chIdx = btnSlot - 5;
+                                        if (chIdx < audioChannels.size()) audioChannels[chIdx]->muteButton.triggerClick();
+                                        else if (chIdx - audioChannels.size() < midiChannels.size()) midiChannels[chIdx - audioChannels.size()]->muteButton.triggerClick();
+                                    }
+                                }
+                                return;
+                            }
+
+                            // 4. Si es un mensaje binario (val == 127 o val == 0) y aun no es fader, aprenderlo como Boton
+                            int slot = autoMappedCCs.indexOf(ccKey);
+                            if (slot < 0 && (val == 127 || val == 0))
+                            {
+                                if (val == 127)
+                                {
+                                    autoMappedButtons.add(ccKey);
+                                    saveAutoMap();
+                                    int newBtnSlot = autoMappedButtons.size() - 1;
+                                    if (newBtnSlot == 0) playButton.triggerClick();
+                                    else if (newBtnSlot == 1) stopButton.triggerClick();
+                                    else if (newBtnSlot == 2) recWavButton.triggerClick();
+                                    else if (newBtnSlot == 3) arpModeBtn.triggerClick();
+                                    else if (newBtnSlot == 4) arrangementTimeline.playheadSec = 0.0;
+                                }
+                                return;
+                            }
+
+                            // 5. Auto-Map dinamico para cualquier fader/knob continuo
+                            if (slot < 0)
+                            {
+                                autoMappedCCs.add(ccKey);
+                                slot = autoMappedCCs.size() - 1;
+                                saveAutoMap();
+                            }
+
+                            int totalAudio = audioChannels.size();
+                            int totalMidi = midiChannels.size();
+                            int totalTracks = totalAudio + totalMidi;
+
+                            if (slot < totalTracks)
+                            {
+                                if (slot < totalAudio)
+                                    audioChannels[slot]->volumeSlider.setValue(norm * 1.5, juce::sendNotificationSync);
+                                else
+                                    midiChannels[slot - totalAudio]->velSlider.setValue(norm, juce::sendNotificationSync);
+                            }
+                            else if (slot == totalTracks)
+                                masterVolumeSlider.setValue(norm * 1.5, juce::sendNotificationSync);
+                            else if (slot == totalTracks + 1)
+                                filterCutoffSlider.setValue(80.0 + std::pow(norm, 2.5) * 17920.0, juce::sendNotificationSync);
+                            else if (slot == totalTracks + 2)
+                                filterResonanceSlider.setValue(norm * 0.95, juce::sendNotificationSync);
+                            else if (slot == totalTracks + 3)
+                                reverbMixSlider.setValue(norm, juce::sendNotificationSync);
+                        });
+                    return;
+                }
+
+
+
+            
+       
 
         juce::String sourceId = source->getIdentifier();
-
-        // Solo interceptar faders/botones de control si NO es una nota musical
-        if (!message.isNoteOnOrOff())
-        {
-            if (motorizedMidiOut != nullptr && processMotorizedSurfaceInput(message))
-                return;
-
-            if (processDmxMidiTrigger(message))
-                return;
-        }
-
         bool anyMidiSolo = false;
         for (auto* m : midiChannels)
-            if (m->soloButton.getToggleState())
-                anyMidiSolo = true;
+            if (m->soloButton.getToggleState()) anyMidiSolo = true;
 
         for (int i = 0; i < midiChannels.size(); ++i)
         {
             auto* m = midiChannels[i];
-            bool isActive = anyMidiSolo ? m->soloButton.getToggleState() : !m->muteButton.getToggleState();
-
-            // Solo recibe este canal si tiene asignado exactamente este dispositivo (o "ALL" elegido manualmente)
-            bool matchesInput = m->assignedInId.isNotEmpty() && (m->assignedInId == sourceId || m->assignedInId == "ALL");
-
+            juce::String assignedId = m->assignedInId;
+            bool matchesInput = (assignedId.isEmpty() || assignedId == "ALL" || assignedId == sourceId);
+            bool isActive = !m->muteButton.getToggleState() && (!anyMidiSolo || m->soloButton.getToggleState());
             if (matchesInput && isActive)
+
             {
                 m->hasActivity = true;
                 if (arpMode > 0 && message.isNoteOnOrOff())
@@ -696,6 +874,7 @@ void MainComponent::triggerInternalSynths(const juce::MidiMessage& message, floa
                 {
                     m->pushIncomingMidi(message);
                 }
+            }
 
                 if (isRecordingMaster && m->recButton.getToggleState() && message.isNoteOnOrOff())
                 {
@@ -749,9 +928,9 @@ void MainComponent::triggerInternalSynths(const juce::MidiMessage& message, floa
                     m->midiOut->sendMessageNow(message);
             }
         }
-    }
+    
 
-
+}
 void MainComponent::timerCallback()
 {
     double now = juce::Time::getMillisecondCounterHiRes() * 0.001;
@@ -2191,4 +2370,23 @@ void MainComponent::openPianoRollEditor()
     pianoRollWindow->setContentOwned(editor, true);
     pianoRollWindow->centreWithSize(860, 480);
     pianoRollWindow->setVisible(true);
+}
+void MainComponent::saveAutoMap()
+{
+    auto file = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory).getChildFile("midaw_universal_map.txt");
+    juce::StringArray ccs, btns;
+    for (int v : autoMappedCCs) ccs.add(juce::String(v));
+    for (int v : autoMappedButtons) btns.add(juce::String(v));
+    file.replaceWithText(ccs.joinIntoString(",") + "\n" + btns.joinIntoString(","));
+}
+
+void MainComponent::loadAutoMap()
+{
+    auto file = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory).getChildFile("midaw_universal_map.txt");
+    if (!file.existsAsFile()) return;
+    auto lines = juce::StringArray::fromLines(file.loadFileAsString());
+    if (lines.size() > 0 && lines[0].isNotEmpty())
+        for (auto& s : juce::StringArray::fromTokens(lines[0], ",", "")) autoMappedCCs.add(s.getIntValue());
+    if (lines.size() > 1 && lines[1].isNotEmpty())
+        for (auto& s : juce::StringArray::fromTokens(lines[1], ",", "")) autoMappedButtons.add(s.getIntValue());
 }

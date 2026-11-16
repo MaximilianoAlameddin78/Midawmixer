@@ -1559,8 +1559,9 @@ juce::Slider filterCutoffSlider, filterResonanceSlider;
 float fltLowL = 0.0f, fltBandL = 0.0f;
 float fltLowR = 0.0f, fltBandR = 0.0f;
 AnalogConsoleLookAndFeel consoleLookAndFeel;
+
 juce::TextButton arpModeBtn{ "ARP: OFF" };
-int arpMode = 0; // 0 = OFF, 1 = UP, 2 = DOWN, 3 = UP/DOWN
+int arpMode = 0;
 juce::SortedSet<int> arpHeldNotes;
 int arpStepIndex = 0;
 int arpLastNote = -1;
@@ -1570,7 +1571,10 @@ int arpTargetChannelsMask = 0;
 int arpMidiChannel = 1;
 juce::MidiBuffer arpUniversalQueue;
 juce::CriticalSection arpLock;
-
+juce::Array<int> autoMappedCCs;
+juce::Array<int> autoMappedButtons;
+void saveAutoMap();
+void loadAutoMap();
 
 JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };
