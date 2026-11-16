@@ -48,6 +48,14 @@ MainComponent::MainComponent() : AudioAppComponent()
     setupFxKnob(mbMidSlider, -12.0, 12.0, 0.0, juce::Colours::gold);
     setupFxKnob(mbHighSlider, -12.0, 12.0, 0.0, juce::Colours::cyan);
     setupFxKnob(mbCompSlider, 0.0, 1.0, 0.25, juce::Colours::hotpink);
+    setupFxKnob(filterCutoffSlider, 80.0, 18000.0, 18000.0, juce::Colours::limegreen);
+    filterCutoffSlider.setRange(80.0, 18000.0, 1.0);
+    filterCutoffSlider.setSkewFactor(0.35);
+    filterCutoffSlider.setMouseDragSensitivity(140);
+    setupFxKnob(filterResonanceSlider, 0.0, 0.95, 0.0, juce::Colours::springgreen);
+    filterResonanceSlider.setMouseDragSensitivity(120);
+
+    setLookAndFeel(&consoleLookAndFeel);
 
     addAndMakeVisible(masterVolumeSlider);
     masterVolumeSlider.setSliderStyle(juce::Slider::LinearVertical);
@@ -245,6 +253,8 @@ MainComponent::MainComponent() : AudioAppComponent()
 
 MainComponent::~MainComponent()
 {
+    setLookAndFeel(nullptr);
+
     menuBar.reset();
     deviceManager.removeMidiInputDeviceCallback({}, this);
     shutdownAudio();
@@ -1203,6 +1213,24 @@ g.drawText("BROWSER | ACTIVO: " + loadedPluginName, 22, chY + 4, 236, 18, juce::
 
 // Fondo de los Canales (Centro)
 g.setColour(juce::Colour(0xff1a1a1a));
+// --- RACK 0: ANALOG RESONANT FILTER ---
+int fltW = 74;
+int fltX = getWidth() - 258 - 126 - 8 - fltW - 8;
+g.setColour(juce::Colour(0xff15201b));
+g.fillRect(fltX, chY, fltW, chH);
+g.setColour(juce::Colours::limegreen);
+g.drawRect(fltX, chY, fltW, chH, 1);
+g.fillRect(fltX, chY, fltW, 22);
+g.setColour(juce::Colours::black);
+g.setFont(juce::FontOptions(10.0f, juce::Font::bold));
+g.drawText("FILTER", fltX, chY, fltW, 22, juce::Justification::centred);
+
+g.setFont(9.5f);
+g.setColour(juce::Colours::limegreen);
+g.drawText("CUTOFF", fltX + 4, chY + 28, fltW - 8, 12, juce::Justification::centred);
+g.setColour(juce::Colours::springgreen);
+g.drawText("RESONANCE", fltX + 4, chY + 128, fltW - 8, 12, juce::Justification::centred);
+
 // --- RACK 1: MULTIBAND EQ / COMP (3 BANDAS) ---
 int mbW = 126;
 int mbX = getWidth() - 258 - mbW - 8;
@@ -1250,9 +1278,7 @@ g.setColour(juce::Colours::deepskyblue);
 g.drawText("CHORUS", fxX + 4, chY + 204, colW, 12, juce::Justification::centred);
 g.setColour(juce::Colours::orange);
 g.drawText("DRIVE/CMP", fxX + 6 + colW, chY + 204, colW, 12, juce::Justification::centred);
-g.setColour(juce::Colours::lightgreen);
-    g.drawText("DELAY TIME", fxX, chY + 235, fxW, 12, juce::Justification::centred);
-    g.drawText("FEEDBACK", fxX, chY + 328, fxW, 12, juce::Justification::centred);
+
 
     g.setColour(juce::Colours::mediumpurple);
     g.fillRect(fxX, chY + chH - 20, fxW, 20);
@@ -1327,7 +1353,8 @@ void MainComponent::resized()
 
     // Capsula 2: Sincronia
     bpmSlider.setBounds(256, menuH + 10, 102, 30);
-    metronomeBtn.setBounds(364, menuH + 10, 62, 30);
+    int centerW = getWidth() - 755;
+
 
     // Ocultar botones redundantes (ya accesibles desde el menu superior)
     addAudioBtn.setVisible(false);
@@ -1348,13 +1375,17 @@ void MainComponent::resized()
     int chH = getHeight() - (menuH + 80) - keyH;
     int brX = 15, brW = 250;
     browserSearchBox.setBounds(brX + 6, chY + 26, brW - 12, 24);
-    int centerW = getWidth() - 535;
+    
+
     if (showTimelineView)
     {
-        int tlH = juce::jmax(130, (int)(chH * 0.44f));
+        int tlH = juce::jmax(115, (int)(chH * 0.33f));
         arrangementTimeline.setBounds(275, chY, centerW, tlH);
+        channelViewport.setBounds(275, chY + tlH + 6, centerW, chH - tlH - 6);
+
         channelViewport.setBounds(275, chY + tlH + 6, centerW, chH - tlH + 9);
     }
+
     else
     {
         channelViewport.setBounds(275, chY, centerW, chH + 15);
@@ -1393,6 +1424,10 @@ void MainComponent::resized()
     mbMidSlider.setBounds(mbX + 6 + mbColW, chY + 42, mbColW, 80);
     mbHighSlider.setBounds(mbX + 4, chY + 142, mbColW, 80);
     mbCompSlider.setBounds(mbX + 6 + mbColW, chY + 142, mbColW, 80);
+    int fltW = 74;
+    int fltX = getWidth() - 258 - 126 - 8 - fltW - 8;
+    filterCutoffSlider.setBounds(fltX + 6, chY + 42, fltW - 12, 80);
+    filterResonanceSlider.setBounds(fltX + 6, chY + 142, fltW - 12, 80);
 
     chorusDepthSlider.setBounds(fxX + 4, chY + 42 + (rowH + 14) * 2, colW, rowH);
     masterDriveSlider.setBounds(fxX + 6 + colW, chY + 42 + (rowH + 14) * 2, colW, rowH);

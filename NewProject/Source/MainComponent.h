@@ -1193,6 +1193,111 @@ private:
     int dragStartX = 0;
     TimelineClip dragInitialClip;
 };
+class AnalogConsoleLookAndFeel : public juce::LookAndFeel_V4
+{
+public:
+    void drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
+        float sliderPos, const float rotaryStartAngle,
+        const float rotaryEndAngle, juce::Slider& slider) override
+    {
+        auto bounds = juce::Rectangle<int>(x, y, width, height).toFloat().reduced(4.0f);
+        float radius = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.44f;
+        float cx = bounds.getCentreX();
+        float cy = bounds.getCentreY() - 2.0f;
+        float angle = rotaryStartAngle + sliderPos * (rotaryEndAngle - rotaryStartAngle);
+
+        auto accent = slider.findColour(juce::Slider::thumbColourId);
+
+        for (int i = 0; i < 11; ++i)
+        {
+            float t = (float)i / 10.0f;
+            float a = rotaryStartAngle + t * (rotaryEndAngle - rotaryStartAngle);
+            float rIn = radius + 3.0f;
+            float rOut = radius + ((i == 0 || i == 5 || i == 10) ? 7.0f : 5.0f);
+            g.setColour((t <= sliderPos) ? accent.withAlpha(0.9f) : juce::Colour(0xff555c68));
+            g.drawLine(cx + std::sin(a) * rIn, cy - std::cos(a) * rIn,
+                cx + std::sin(a) * rOut, cy - std::cos(a) * rOut, 1.3f);
+        }
+
+        juce::Path valueArc;
+        valueArc.addCentredArc(cx, cy, radius + 1.5f, radius + 1.5f, 0.0f, rotaryStartAngle, angle, true);
+        g.setColour(accent);
+        g.strokePath(valueArc, juce::PathStrokeType(2.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        g.setColour(juce::Colours::black.withAlpha(0.65f));
+        g.fillEllipse(cx - radius + 1.5f, cy - radius + 2.5f, radius * 2.0f, radius * 2.0f);
+
+        juce::ColourGradient metalGrad(juce::Colour(0xff464c56), cx - radius * 0.5f, cy - radius * 0.5f,
+            juce::Colour(0xff181b20), cx + radius * 0.7f, cy + radius * 0.7f, true);
+        g.setGradientFill(metalGrad);
+        g.fillEllipse(cx - radius, cy - radius, radius * 2.0f, radius * 2.0f);
+
+        g.setColour(juce::Colour(0xff6b7380));
+        g.drawEllipse(cx - radius, cy - radius, radius * 2.0f, radius * 2.0f, 1.2f);
+
+        float capR = radius * 0.76f;
+        g.setColour(juce::Colour(0xff23272f));
+        g.fillEllipse(cx - capR, cy - capR, capR * 2.0f, capR * 2.0f);
+
+        float ptrIn = radius * 0.22f;
+        float ptrOut = radius * 0.92f;
+        g.setColour(juce::Colours::white);
+        g.drawLine(cx + std::sin(angle) * ptrIn, cy - std::cos(angle) * ptrIn,
+            cx + std::sin(angle) * ptrOut, cy - std::cos(angle) * ptrOut, 2.4f);
+        g.setColour(accent);
+        g.fillEllipse(cx + std::sin(angle) * (ptrOut - 2.0f) - 2.0f,
+            cy - std::cos(angle) * (ptrOut - 2.0f) - 2.0f, 4.0f, 4.0f);
+    }
+
+    void drawLinearSlider(juce::Graphics& g, int x, int y, int width, int height,
+        float sliderPos, float minSliderPos, float maxSliderPos,
+        const juce::Slider::SliderStyle style, juce::Slider& slider) override
+    {
+        if (style != juce::Slider::LinearVertical)
+        {
+            LookAndFeel_V4::drawLinearSlider(g, x, y, width, height, sliderPos, minSliderPos, maxSliderPos, style, slider);
+            return;
+        }
+
+        float cx = x + width * 0.5f;
+        float trackTop = (float)y + 10.0f;
+        float trackBot = (float)(y + height) - 10.0f;
+        float trackH = trackBot - trackTop;
+
+        for (int i = 0; i <= 10; ++i)
+        {
+            float ty = trackTop + (trackH * i) / 10.0f;
+            float tickW = (i % 5 == 0) ? 9.0f : 5.0f;
+            g.setColour((i == 2) ? juce::Colours::gold : juce::Colour(0xff6c7482));
+            g.drawLine(cx - 8.0f - tickW, ty, cx - 8.0f, ty, 1.1f);
+            g.drawLine(cx + 8.0f, ty, cx + 8.0f + tickW, ty, 1.1f);
+        }
+
+        g.setColour(juce::Colour(0xff0b0d10));
+        g.fillRoundedRectangle(cx - 3.5f, trackTop, 7.0f, trackH, 2.5f);
+
+        float capW = 28.0f;
+        float capH = 42.0f;
+        float capX = cx - capW * 0.5f;
+        float capY = juce::jlimit(trackTop, trackBot - capH, sliderPos - capH * 0.5f);
+
+        g.setColour(juce::Colours::black.withAlpha(0.7f));
+        g.fillRoundedRectangle(capX + 2.0f, capY + 4.0f, capW, capH, 3.0f);
+
+        juce::ColourGradient faderGrad(juce::Colour(0xff6b7280), capX, capY,
+            juce::Colour(0xff23272f), capX, capY + capH, false);
+        g.setGradientFill(faderGrad);
+        g.fillRoundedRectangle(capX, capY, capW, capH, 3.0f);
+
+        g.setColour(juce::Colour(0xff9aa2b0));
+        g.drawRoundedRectangle(capX, capY, capW, capH, 3.0f, 1.1f);
+
+        g.setColour(juce::Colour(0xff14171c));
+        g.fillRect(capX + 2.0f, capY + capH * 0.5f - 3.0f, capW - 4.0f, 6.0f);
+        g.setColour(juce::Colours::white);
+        g.fillRect(capX + 2.0f, capY + capH * 0.5f - 1.0f, capW - 4.0f, 2.0f);
+    }
+};
 
 class MainComponent : public juce::AudioAppComponent,
     public juce::Timer,
@@ -1445,12 +1550,14 @@ juce::TextButton pianoRollBtn{ "PIANO ROLL" };
 std::unique_ptr<juce::DocumentWindow> pianoRollWindow;
 void openPianoRollEditor();
 
-
-
 juce::Slider mbLowSlider, mbMidSlider, mbHighSlider, mbCompSlider;
 float mbLpL = 0.0f, mbLpR = 0.0f;
 float mbHpL = 0.0f, mbHpR = 0.0f;
 float mbEnvLow = 0.0f, mbEnvMid = 0.0f, mbEnvHigh = 0.0f;
 
+juce::Slider filterCutoffSlider, filterResonanceSlider;
+float fltLowL = 0.0f, fltBandL = 0.0f;
+float fltLowR = 0.0f, fltBandR = 0.0f;
+AnalogConsoleLookAndFeel consoleLookAndFeel;
 JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };
