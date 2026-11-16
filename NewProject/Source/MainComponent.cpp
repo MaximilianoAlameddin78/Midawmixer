@@ -175,6 +175,16 @@ MainComponent::MainComponent() : AudioAppComponent()
     addAndMakeVisible(pianoRollBtn);
     pianoRollBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff2b5876));
     pianoRollBtn.onClick = [this]() { openPianoRollEditor(); };
+    addAndMakeVisible(arpModeBtn);
+    arpModeBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff262a33));
+    arpModeBtn.onClick = [this]()
+        {
+            arpMode = (arpMode + 1) % 4;
+            const char* labels[] = { "ARP: OFF", "ARP: UP", "ARP: DOWN", "ARP: UP/DN" };
+            arpModeBtn.setButtonText(labels[arpMode]);
+            arpModeBtn.setColour(juce::TextButton::buttonColourId,
+                arpMode == 0 ? juce::Colour(0xff262a33) : juce::Colour(0xff008f5a));
+        };
 
 
     addAndMakeVisible(scanVstBtn);
@@ -646,6 +656,8 @@ void MainComponent::triggerInternalSynths(const juce::MidiMessage& message, floa
             return;
 
         keyboardState.processNextMidiEvent(message);
+        
+
         juce::String sourceId = source->getIdentifier();
 
         // Solo interceptar faders/botones de control si NO es una nota musical
@@ -674,7 +686,16 @@ void MainComponent::triggerInternalSynths(const juce::MidiMessage& message, floa
             if (matchesInput && isActive)
             {
                 m->hasActivity = true;
-                m->pushIncomingMidi(message);
+                if (arpMode > 0 && message.isNoteOnOrOff())
+                {
+                    arpTargetChannelsMask |= (1 << i);
+                    const juce::ScopedLock sl(arpLock);
+                    arpUniversalQueue.addEvent(message, 0);
+                }
+                else
+                {
+                    m->pushIncomingMidi(message);
+                }
 
                 if (isRecordingMaster && m->recButton.getToggleState() && message.isNoteOnOrOff())
                 {
@@ -782,18 +803,123 @@ void MainComponent::timerCallback()
 
     if (showTimelineView)
         arrangementTimeline.repaint();
-
 }
 
 void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill)
 {
-    bufferToFill.clearActiveBufferRegion();
     juce::MidiBuffer incomingMidi;
-    {
-        const juce::ScopedLock sl(midiControlLock);
-        incomingMidi.swapWith(pendingControlMidi);
-    }
+
     keyboardState.processNextMidiBuffer(incomingMidi, 0, bufferToFill.numSamples, true);
+
+    // --- ARPEGIADOR MIDI UNIVERSAL (COMPATIBLE CON CUALQUIER CONTROLADOR) ---
+    if (arpMode > 0)
+    {
+        {
+            const juce::ScopedLock sl(arpLock);
+            incomingMidi.addEvents(arpUniversalQueue, 0, bufferToFill.numSamples, 0);
+            arpUniversalQueue.clear();
+        }
+
+        juce::MidiBuffer filteredMidi;
+        for (const auto metadata : incomingMidi)
+        {
+            auto msg = metadata.getMessage();
+            if (msg.isNoteOn(false))
+            {
+                arpHeldNotes.add(msg.getNoteNumber());
+                arpMidiChannel = msg.getChannel();
+            }
+            else if (msg.isNoteOff(true))
+            {
+                arpHeldNotes.removeValue(msg.getNoteNumber());
+            }
+            else
+            {
+                filteredMidi.addEvent(msg, metadata.samplePosition);
+            }
+        }
+
+        double sr = deviceManager.getCurrentAudioDevice() != nullptr
+            ? deviceManager.getCurrentAudioDevice()->getCurrentSampleRate()
+            : 48000.0;
+        double currentBpm = juce::jlimit(40.0, 260.0, bpmSlider.getValue());
+        double samplesPerStep = (60.0 / currentBpm / 4.0) * sr;
+
+        if (arpHeldNotes.size() == 0)
+        {
+            if (arpLastNote >= 0)
+            {
+                filteredMidi.addEvent(juce::MidiMessage::noteOff(arpMidiChannel, arpLastNote), 0);
+                arpLastNote = -1;
+            }
+            arpStepIndex = 0;
+            arpSampleCounter = 0.0;
+            arpGoingUp = true;
+        }
+        else
+        {
+            juce::Array<int> pattern;
+            for (int n : arpHeldNotes) pattern.add(n);
+            if (pattern.size() == 1)
+                pattern.add(juce::jmin(127, pattern.getFirst() + 12));
+
+
+            int numSamples = bufferToFill.numSamples;
+            int pos = 0;
+            while (pos < numSamples)
+            {
+                if (arpSampleCounter <= 0.0)
+                {
+                    if (arpLastNote >= 0)
+                        filteredMidi.addEvent(juce::MidiMessage::noteOff(arpMidiChannel, arpLastNote), pos);
+
+                    int count = pattern.size();
+                    int idx = 0;
+                    if (arpMode == 1)
+                    {
+                        idx = arpStepIndex % count;
+                        arpStepIndex = (arpStepIndex + 1) % count;
+                    }
+                    else if (arpMode == 2)
+                    {
+                        idx = (count - 1) - (arpStepIndex % count);
+                        arpStepIndex = (arpStepIndex + 1) % count;
+                    }
+                    else
+                    {
+                        arpStepIndex = juce::jlimit(0, count - 1, arpStepIndex);
+                        idx = arpStepIndex;
+                        if (arpGoingUp)
+                        {
+                            if (++arpStepIndex >= count - 1) arpGoingUp = false;
+                        }
+                        else
+                        {
+                            if (--arpStepIndex <= 0) arpGoingUp = true;
+                        }
+                    }
+
+                    int noteToPlay = pattern[idx];
+                    filteredMidi.addEvent(juce::MidiMessage::noteOn(arpMidiChannel, noteToPlay, (juce::uint8)110), pos);
+                    arpLastNote = noteToPlay;
+                    arpSampleCounter += samplesPerStep;
+                }
+
+                int advance = juce::jmin(numSamples - pos, (int)std::ceil(arpSampleCounter));
+                arpSampleCounter -= advance;
+                pos += advance;
+            }
+        }
+
+        incomingMidi.swapWith(filteredMidi);
+    }
+    else if (arpLastNote >= 0)
+    {
+        incomingMidi.addEvent(juce::MidiMessage::noteOff(arpMidiChannel, arpLastNote), 0);
+        arpLastNote = -1;
+        arpHeldNotes.clear();
+    }
+
     for (const auto metadata : incomingMidi)
     {
         auto msg = metadata.getMessage();
@@ -1345,7 +1471,8 @@ void MainComponent::resized()
         menuBar->setBounds(0, 0, getWidth(), menuH);
     timelineToggleBtn.setBounds(434, menuH + 10, 82, 30);
     pianoRollBtn.setBounds(524, menuH + 10, 96, 30);
-    
+    arpModeBtn.setBounds(628, menuH + 10, 96, 30);
+
     // Capsula 1: Transporte
     playButton.setBounds(20, menuH + 10, 62, 30);
     stopButton.setBounds(88, menuH + 10, 62, 30);
