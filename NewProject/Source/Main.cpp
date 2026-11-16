@@ -67,3 +67,4 @@ private:
 };
 
 START_JUCE_APPLICATION(NewProjectApplication)
+

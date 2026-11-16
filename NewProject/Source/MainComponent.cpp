@@ -44,6 +44,10 @@ MainComponent::MainComponent() : AudioAppComponent()
     setupFxKnob(delayFeedbackSlider, 0.0, 0.85, 0.0, juce::Colours::mediumspringgreen);
     setupFxKnob(chorusDepthSlider, 0.0, 1.0, 0.0, juce::Colours::deepskyblue);
     setupFxKnob(masterDriveSlider, 0.0, 1.0, 0.15, juce::Colours::orange);
+    setupFxKnob(mbLowSlider, -12.0, 12.0, 0.0, juce::Colours::coral);
+    setupFxKnob(mbMidSlider, -12.0, 12.0, 0.0, juce::Colours::gold);
+    setupFxKnob(mbHighSlider, -12.0, 12.0, 0.0, juce::Colours::cyan);
+    setupFxKnob(mbCompSlider, 0.0, 1.0, 0.25, juce::Colours::hotpink);
 
     addAndMakeVisible(masterVolumeSlider);
     masterVolumeSlider.setSliderStyle(juce::Slider::LinearVertical);
@@ -366,6 +370,8 @@ void MainComponent::loadSessionFromFile()
                 reverbMixSlider.setValue(xml->getDoubleAttribute("revMix", 0.0));
                 delayTimeSlider.setValue(xml->getDoubleAttribute("delTime", 0.35));
                 delayFeedbackSlider.setValue(xml->getDoubleAttribute("delFeed", 0.0));
+                chorusDepthSlider.setValue(xml->getDoubleAttribute("chorusDepth", 0.0));
+                masterDriveSlider.setValue(xml->getDoubleAttribute("masterDrive", 0.15));
 
                 audioChannels.clear();
                 for (auto* chXml : xml->getChildWithTagNameIterator("AudioChannel"))
@@ -965,6 +971,48 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
         }
 
         if (leftChannel != nullptr) leftChannel[sampleIndex] = outL + clickSample;
+        // --- ECUALIZADOR Y COMPRESOR MULTIBANDA (3 BANDAS: LOW <220Hz, MID, HIGH >3.2kHz) ---
+        float lowGain = juce::Decibels::decibelsToGain((float)mbLowSlider.getValue());
+        float midGain = juce::Decibels::decibelsToGain((float)mbMidSlider.getValue());
+        float highGain = juce::Decibels::decibelsToGain((float)mbHighSlider.getValue());
+        float mbCompAmt = (float)mbCompSlider.getValue();
+
+        float alphaLow = 1.0f - std::exp(-2.0f * 3.14159265f * 220.0f / (float)blindRate);
+        float alphaHigh = 1.0f - std::exp(-2.0f * 3.14159265f * 3200.0f / (float)blindRate);
+
+        mbLpL += alphaLow * (outL - mbLpL);
+        mbLpR += alphaLow * (outR - mbLpR);
+        mbHpL += alphaHigh * (outL - mbHpL);
+        mbHpR += alphaHigh * (outR - mbHpR);
+
+        float bandLowL = mbLpL, bandLowR = mbLpR;
+        float bandHighL = outL - mbHpL, bandHighR = outR - mbHpR;
+        float bandMidL = outL - bandLowL - bandHighL;
+        float bandMidR = outR - bandLowR - bandHighR;
+
+        if (mbCompAmt > 0.001f)
+        {
+            auto compressBand = [&](float& sL, float& sR, float& env, float threshBase)
+                {
+                    float pk = juce::jmax(std::abs(sL), std::abs(sR));
+                    float c = (pk > env) ? 0.01f : 0.0006f;
+                    env += c * (pk - env);
+                    float th = threshBase - mbCompAmt * 0.25f;
+                    if (env > th && env > 0.0001f)
+                    {
+                        float g = (th + (env - th) * 0.30f) / env;
+                        sL *= g;
+                        sR *= g;
+                    }
+                };
+            compressBand(bandLowL, bandLowR, mbEnvLow, 0.55f);
+            compressBand(bandMidL, bandMidR, mbEnvMid, 0.50f);
+            compressBand(bandHighL, bandHighR, mbEnvHigh, 0.45f);
+        }
+
+        outL = bandLowL * lowGain + bandMidL * midGain + bandHighL * highGain;
+        outR = bandLowR * lowGain + bandMidR * midGain + bandHighR * highGain;
+
         if (rightChannel != nullptr) rightChannel[sampleIndex] = outR + clickSample;
 
 
@@ -1155,29 +1203,54 @@ g.drawText("BROWSER | ACTIVO: " + loadedPluginName, 22, chY + 4, 236, 18, juce::
 
 // Fondo de los Canales (Centro)
 g.setColour(juce::Colour(0xff1a1a1a));
-g.fillRoundedRectangle(275.0f, (float)chY, (float)(getWidth() - 535), (float)chH, 8.0f);
+// --- RACK 1: MULTIBAND EQ / COMP (3 BANDAS) ---
+int mbW = 126;
+int mbX = getWidth() - 258 - mbW - 8;
+g.setColour(juce::Colour(0xff181c22));
+g.fillRect(mbX, chY, mbW, chH);
+g.setColour(juce::Colours::hotpink);
+g.drawRect(mbX, chY, mbW, chH, 1);
+g.fillRect(mbX, chY, mbW, 22);
+g.setColour(juce::Colours::white);
+g.setFont(juce::FontOptions(10.5f, juce::Font::bold));
+g.drawText("MULTIBAND EQ/COMP", mbX, chY, mbW, 22, juce::Justification::centred);
 
+int mbColW = (mbW - 10) / 2;
+g.setFont(9.5f);
+g.setColour(juce::Colours::coral);
+g.drawText("LOW EQ", mbX + 4, chY + 28, mbColW, 12, juce::Justification::centred);
+g.setColour(juce::Colours::gold);
+g.drawText("MID EQ", mbX + 6 + mbColW, chY + 28, mbColW, 12, juce::Justification::centred);
+g.setColour(juce::Colours::cyan);
+g.drawText("HIGH EQ", mbX + 4, chY + 128, mbColW, 12, juce::Justification::centred);
+g.setColour(juce::Colours::hotpink);
+g.drawText("MB COMP", mbX + 6 + mbColW, chY + 128, mbColW, 12, juce::Justification::centred);
 
+// --- RACK 2: MASTER FX (6 KNOBS EN 2x3) ---
+int fxX = getWidth() - 258;
+int fxW = 114;
+int colW = (fxW - 10) / 2;
+g.setColour(juce::Colour(0xff1d1824));
+g.fillRect(fxX, chY, fxW, chH);
+g.setColour(juce::Colours::mediumpurple);
+g.drawRect(fxX, chY, fxW, chH, 1);
+g.fillRect(fxX, chY, fxW, 22);
+g.setColour(juce::Colours::white);
+g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+g.drawText("MASTER FX", fxX, chY, fxW, 22, juce::Justification::centred);
 
-    int fxX = getWidth() - 245;
-    int fxW = 100;
-    g.setColour(juce::Colour(0xff1d1824));
-    g.fillRect(fxX, chY, fxW, chH);
-    g.setColour(juce::Colours::mediumpurple);
-    g.drawRect(fxX, chY, fxW, chH, 1);
-
-    g.setColour(juce::Colours::mediumpurple);
-    g.fillRect(fxX, chY, fxW, 22);
-    g.setColour(juce::Colours::white);
-    g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
-    g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
-    g.drawText("MASTER FX", fxX, chY, fxW, 22, juce::Justification::centred);
-
-    g.setColour(juce::Colours::plum);
-    g.setFont(9.5f);
-    g.drawText("REV SIZE", fxX, chY + 32, fxW, 12, juce::Justification::centred);
-    g.drawText("REV MIX", fxX, chY + 125, fxW, 12, juce::Justification::centred);
-    g.setColour(juce::Colours::lightgreen);
+g.setFont(9.0f);
+g.setColour(juce::Colours::plum);
+g.drawText("REV SIZE", fxX + 4, chY + 28, colW, 12, juce::Justification::centred);
+g.drawText("REV MIX", fxX + 6 + colW, chY + 28, colW, 12, juce::Justification::centred);
+g.setColour(juce::Colours::lightgreen);
+g.drawText("DEL TIME", fxX + 4, chY + 116, colW, 12, juce::Justification::centred);
+g.drawText("DEL FEED", fxX + 6 + colW, chY + 116, colW, 12, juce::Justification::centred);
+g.setColour(juce::Colours::deepskyblue);
+g.drawText("CHORUS", fxX + 4, chY + 204, colW, 12, juce::Justification::centred);
+g.setColour(juce::Colours::orange);
+g.drawText("DRIVE/CMP", fxX + 6 + colW, chY + 204, colW, 12, juce::Justification::centred);
+g.setColour(juce::Colours::lightgreen);
     g.drawText("DELAY TIME", fxX, chY + 235, fxW, 12, juce::Justification::centred);
     g.drawText("FEEDBACK", fxX, chY + 328, fxW, 12, juce::Justification::centred);
 
@@ -1236,7 +1309,7 @@ g.fillRoundedRectangle(275.0f, (float)chY, (float)(getWidth() - 535), (float)chH
     g.setColour(juce::Colours::white);
     g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
     g.drawText("MAIN", masterX, chY + chH - 20, masterW, 20, juce::Justification::centred);
-
+  
 }
 
 void MainComponent::resized()
@@ -1310,6 +1383,17 @@ void MainComponent::resized()
     reverbMixSlider.setBounds(fxX + 6 + colW, chY + 42, colW, rowH);
     delayTimeSlider.setBounds(fxX + 4, chY + 42 + rowH + 14, colW, rowH);
     delayFeedbackSlider.setBounds(fxX + 6 + colW, chY + 42 + rowH + 14, colW, rowH);
+    chorusDepthSlider.setBounds(fxX + 4, chY + 42 + (rowH + 14) * 2, colW, rowH);
+    masterDriveSlider.setBounds(fxX + 6 + colW, chY + 42 + (rowH + 14) * 2, colW, rowH);
+
+    int mbW = 126;
+    int mbX = getWidth() - 258 - mbW - 8;
+    int mbColW = (mbW - 10) / 2;
+    mbLowSlider.setBounds(mbX + 4, chY + 42, mbColW, 80);
+    mbMidSlider.setBounds(mbX + 6 + mbColW, chY + 42, mbColW, 80);
+    mbHighSlider.setBounds(mbX + 4, chY + 142, mbColW, 80);
+    mbCompSlider.setBounds(mbX + 6 + mbColW, chY + 142, mbColW, 80);
+
     chorusDepthSlider.setBounds(fxX + 4, chY + 42 + (rowH + 14) * 2, colW, rowH);
     masterDriveSlider.setBounds(fxX + 6 + colW, chY + 42 + (rowH + 14) * 2, colW, rowH);
     int masterX = getWidth() - 135;

@@ -1433,7 +1433,7 @@ private:
     bool processDmxMidiTrigger(const juce::MidiMessage& message);
     ArrangementTimeline arrangementTimeline;
     juce::TextButton timelineToggleBtn{ "TIMELINE" };
-    bool showTimelineView = true;
+    bool showTimelineView = true; 
 
     int selectedMidiTrackIndex = 0;
 
@@ -1445,6 +1445,12 @@ juce::TextButton pianoRollBtn{ "PIANO ROLL" };
 std::unique_ptr<juce::DocumentWindow> pianoRollWindow;
 void openPianoRollEditor();
 
+
+
+juce::Slider mbLowSlider, mbMidSlider, mbHighSlider, mbCompSlider;
+float mbLpL = 0.0f, mbLpR = 0.0f;
+float mbHpL = 0.0f, mbHpR = 0.0f;
+float mbEnvLow = 0.0f, mbEnvMid = 0.0f, mbEnvHigh = 0.0f;
+
 JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };
-
