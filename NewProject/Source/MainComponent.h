@@ -6,6 +6,104 @@ struct RecordedMidiEvent
     double timestampSeconds;
     juce::MidiMessage message;
 };
+class ChannelEqVisualizer : public juce::Component
+{
+public:
+    ChannelEqVisualizer(juce::String trackName, juce::Slider& lowS, juce::Slider& midS, juce::Slider& highS)
+        : name(trackName), lowSlider(lowS), midSlider(midS), highSlider(highS)
+    {
+        setSize(420, 230);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        auto b = getLocalBounds().toFloat();
+        g.fillAll(juce::Colour(0xff14171d));
+
+        g.setColour(juce::Colours::white.withAlpha(0.08f));
+        for (int i = 1; i <= 4; ++i)
+            g.drawHorizontalLine((int)(b.getHeight() * i / 5.0f), 12.0f, b.getWidth() - 12.0f);
+        float freqs[] = { 0.15f, 0.35f, 0.55f, 0.75f, 0.90f };
+        for (float fx : freqs)
+            g.drawVerticalLine((int)(b.getWidth() * fx), 26.0f, b.getHeight() - 18.0f);
+
+        float midY = b.getHeight() * 0.52f;
+        g.setColour(juce::Colours::white.withAlpha(0.22f));
+        g.drawHorizontalLine((int)midY, 12.0f, b.getWidth() - 12.0f);
+
+        g.setColour(juce::Colours::cyan);
+        g.setFont(13.0f);
+        g.drawText("EQ PARAMETRICO: " + name + " (Arrastra los 3 nodos)", 12, 4, getWidth() - 24, 20, juce::Justification::left);
+
+        float lowNorm = (float)((lowSlider.getValue() - lowSlider.getMinimum()) / juce::jmax(0.001, lowSlider.getMaximum() - lowSlider.getMinimum()));
+        float midNorm = (float)((midSlider.getValue() - midSlider.getMinimum()) / juce::jmax(0.001, midSlider.getMaximum() - midSlider.getMinimum()));
+        float highNorm = (float)((highSlider.getValue() - highSlider.getMinimum()) / juce::jmax(0.001, highSlider.getMaximum() - highSlider.getMinimum()));
+
+        float maxRangeY = b.getHeight() * 0.34f;
+        pLow = { b.getWidth() * 0.20f, midY - (lowNorm - 0.5f) * 2.0f * maxRangeY };
+        pMid = { b.getWidth() * 0.52f, midY - (midNorm - 0.5f) * 2.0f * maxRangeY };
+        pHigh = { b.getWidth() * 0.84f, midY - (highNorm - 0.5f) * 2.0f * maxRangeY };
+
+        juce::Path curve;
+        curve.startNewSubPath(12.0f, pLow.y);
+        curve.cubicTo(b.getWidth() * 0.10f, pLow.y, b.getWidth() * 0.15f, pLow.y, pLow.x, pLow.y);
+        curve.cubicTo(b.getWidth() * 0.36f, pLow.y, b.getWidth() * 0.36f, pMid.y, pMid.x, pMid.y);
+        curve.cubicTo(b.getWidth() * 0.68f, pMid.y, b.getWidth() * 0.68f, pHigh.y, pHigh.x, pHigh.y);
+        curve.lineTo(b.getWidth() - 12.0f, pHigh.y);
+
+        juce::Path fillPath(curve);
+        fillPath.lineTo(b.getWidth() - 12.0f, midY);
+        fillPath.lineTo(12.0f, midY);
+        fillPath.closeSubPath();
+        g.setColour(juce::Colours::deepskyblue.withAlpha(0.18f));
+        g.fillPath(fillPath);
+
+        g.setColour(juce::Colours::deepskyblue);
+        g.strokePath(curve, juce::PathStrokeType(2.5f));
+
+        auto drawNode = [&](juce::Point<float> pt, juce::Colour col, juce::String lbl)
+            {
+                g.setColour(col);
+                g.fillEllipse(pt.x - 7.0f, pt.y - 7.0f, 14.0f, 14.0f);
+                g.setColour(juce::Colours::white);
+                g.drawEllipse(pt.x - 7.0f, pt.y - 7.0f, 14.0f, 14.0f, 1.5f);
+                g.setFont(11.0f);
+                g.drawText(lbl, (int)pt.x - 24, (int)pt.y - 22, 48, 14, juce::Justification::centred);
+            };
+        drawNode(pLow, juce::Colours::orange, "LOW");
+        drawNode(pMid, juce::Colours::limegreen, "MID");
+        drawNode(pHigh, juce::Colours::cyan, "HIGH");
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        auto pos = e.position;
+        if (pos.getDistanceFrom(pLow) < 22.0f) draggedBand = 0;
+        else if (pos.getDistanceFrom(pMid) < 22.0f) draggedBand = 1;
+        else if (pos.getDistanceFrom(pHigh) < 22.0f) draggedBand = 2;
+        else draggedBand = -1;
+    }
+
+    void mouseDrag(const juce::MouseEvent& e) override
+    {
+        if (draggedBand < 0) return;
+        float midY = getHeight() * 0.52f;
+        float maxRangeY = getHeight() * 0.34f;
+        float norm = juce::jlimit(0.0f, 1.0f, 0.5f - ((e.position.y - midY) / (2.0f * maxRangeY)));
+
+        juce::Slider* target = (draggedBand == 0) ? &lowSlider : (draggedBand == 1 ? &midSlider : &highSlider);
+        target->setValue(target->getMinimum() + norm * (target->getMaximum() - target->getMinimum()), juce::sendNotificationSync);
+        repaint();
+    }
+
+private:
+    juce::String name;
+    juce::Slider& lowSlider;
+    juce::Slider& midSlider;
+    juce::Slider& highSlider;
+    juce::Point<float> pLow, pMid, pHigh;
+    int draggedBand = -1;
+};
 
 class AudioChannelStrip : public juce::Component
 {
@@ -52,7 +150,13 @@ public:
         setupMiniKnob(inputGainSlider, 0.0, 2.0, 1.0, juce::Colours::orange);
         inputGainSlider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 46, 14);
         setupMiniKnob(panSlider, 0.0, 1.0, 0.5, juce::Colours::dodgerblue);
-        
+        addAndMakeVisible(openEqBtn);
+        openEqBtn.onClick = [this]()
+            {
+                auto* viz = new ChannelEqVisualizer("Audio Track", eqLowSlider, eqMidSlider, eqHighSlider);
+                juce::CallOutBox::launchAsynchronously(std::unique_ptr<juce::Component>(viz), openEqBtn.getScreenBounds(), nullptr);
+            };
+
 
         setupMiniKnob(eqLowSlider, -12.0, 12.0, 0.0, juce::Colours::limegreen);
         setupMiniKnob(eqMidSlider, -12.0, 12.0, 0.0, juce::Colours::gold);
@@ -147,6 +251,10 @@ public:
         eqMidSlider.setBounds(34, 125, 28, 32);
         eqLowSlider.setBounds(64, 125, 28, 32);
         panSlider.setBounds(27, 173, 40, 40);
+        openEqBtn.setBounds(68, 181, 24, 22);
+
+        
+
         muteButton.setBounds(6, 218, 26, 22);
         soloButton.setBounds(34, 218, 26, 22);
         recButton.setBounds(62, 218, 26, 22);
@@ -190,6 +298,7 @@ public:
     juce::IIRFilter lowFilter, midFilter, highFilter;
     juce::TextButton muteButton{ "M" }, soloButton{ "S" };
     double phase = 0.0;
+    juce::TextButton openEqBtn { "EQ" };
 
     };
     //==============================================================================
@@ -545,6 +654,20 @@ public:
             addAndMakeVisible(outSelector);
             addChildComponent(instSelector);
             addMouseListener(this, true);
+            addAndMakeVisible(midiPanSlider);
+            addAndMakeVisible(midiEqBtn);
+            midiPanSlider.setRange(0.0, 1.0, 0.01);
+            midiPanSlider.setValue(0.5, juce::dontSendNotification);
+            midiEqLow.setRange(-12.0, 12.0, 0.1); midiEqLow.setValue(0.0, juce::dontSendNotification);
+            midiEqMid.setRange(-12.0, 12.0, 0.1); midiEqMid.setValue(0.0, juce::dontSendNotification);
+            midiEqHigh.setRange(-12.0, 12.0, 0.1); midiEqHigh.setValue(0.0, juce::dontSendNotification);
+
+            midiEqBtn.onClick = [this]()
+                {
+                    auto* viz = new ChannelEqVisualizer(assignedInstrumentName, midiEqLow, midiEqMid, midiEqHigh);
+                    juce::CallOutBox::launchAsynchronously(std::unique_ptr<juce::Component>(viz), midiEqBtn.getScreenBounds(), nullptr);
+                };
+
 
             for (int v = 0; v < 8; ++v)
                 channelSynth.addVoice(new MidawSynthVoice());
@@ -732,9 +855,35 @@ public:
                             tempChannelBuffer.clear();
                             channelSynth.renderNextBlock(tempChannelBuffer, localMidi, 0, numSamples);
 
+                            // Actualizar coeficientes de EQ de 3 bandas del canal MIDI
+                            double sr = sampleRate > 0.0 ? sampleRate : 48000.0;
+                            midiLowF.setCoefficients(juce::IIRCoefficients::makeLowShelf(sr, 160.0, 0.707, juce::Decibels::decibelsToGain((float)midiEqLow.getValue())));
+                            midiMidF.setCoefficients(juce::IIRCoefficients::makePeakFilter(sr, 1200.0, 0.85, juce::Decibels::decibelsToGain((float)midiEqMid.getValue())));
+                            midiHighF.setCoefficients(juce::IIRCoefficients::makeHighShelf(sr, 6500.0, 0.707, juce::Decibels::decibelsToGain((float)midiEqHigh.getValue())));
+
                             float gain = (float)velSlider.getValue();
-                            for (int ch = 0; ch < mixBuffer.getNumChannels(); ++ch)
-                                mixBuffer.addFrom(ch, startSample, tempChannelBuffer, ch, 0, numSamples, gain);
+                            float pan = (float)midiPanSlider.getValue(); // 0.0 = Izquierda, 0.5 = Centro, 1.0 = Derecha
+                            float gainL = gain * (1.0f - pan) * 1.414f;
+                            float gainR = gain * pan * 1.414f;
+
+                            if (tempChannelBuffer.getNumChannels() > 0 && numSamples > 0)
+                            {
+                                float* tempL = tempChannelBuffer.getWritePointer(0);
+                                midiLowF.processSamples(tempL, numSamples);
+                                midiMidF.processSamples(tempL, numSamples);
+                                midiHighF.processSamples(tempL, numSamples);
+
+                                if (mixBuffer.getNumChannels() >= 2)
+                                {
+                                    mixBuffer.addFrom(0, startSample, tempChannelBuffer, 0, 0, numSamples, gainL);
+                                    mixBuffer.addFrom(1, startSample, tempChannelBuffer, 0, 0, numSamples, gainR);
+                                }
+                                else if (mixBuffer.getNumChannels() == 1)
+                                {
+                                    mixBuffer.addFrom(0, startSample, tempChannelBuffer, 0, 0, numSamples, gain);
+                                }
+                            }
+
                         }
 
                         void refreshDevices()
@@ -831,6 +980,9 @@ public:
                             muteButton.setBounds(10, 232, 35, 22);
                             soloButton.setBounds(50, 232, 35, 22);
                             velSlider.setBounds(15, 273, w - 30, h - 297);
+                            midiPanSlider.setBounds(10, 200, 34, 28);
+                            midiEqBtn.setBounds(48, 203, 38, 22);
+
                         }
 
                         int midiIndex;
@@ -840,6 +992,13 @@ public:
                         juce::TextButton recButton{ "REC" }, loopButton{ "LOOP" };
                         juce::TextButton muteButton{ "M" }, soloButton{ "S" };
                         juce::Slider velSlider;
+                        juce::Slider midiPanSlider{ juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
+                        juce::Slider midiEqLow{ juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
+                        juce::Slider midiEqMid{ juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
+                        juce::Slider midiEqHigh{ juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
+                        juce::TextButton midiEqBtn{ "EQ" };
+                        juce::IIRFilter midiLowF, midiMidF, midiHighF;
+
 
                         juce::String assignedInId;
                         std::unique_ptr<juce::MidiOutput> midiOut;
