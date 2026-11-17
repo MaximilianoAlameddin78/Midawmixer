@@ -3,6 +3,20 @@
 MainComponent::MainComponent() : AudioAppComponent()
 {
     startTimer(20);
+    registerMidiLearnTarget(&masterVolumeSlider, "MASTER_VOL");
+    registerMidiLearnTarget(&filterCutoffSlider, "FILTER_CUTOFF");
+    registerMidiLearnTarget(&filterResonanceSlider, "FILTER_RES");
+    registerMidiLearnTarget(&reverbMixSlider, "REVERB_MIX");
+    registerMidiLearnTarget(&playButton, "PLAY_BTN");
+    registerMidiLearnTarget(&stopButton, "STOP_BTN");
+    registerMidiLearnTarget(&recWavButton, "REC_BTN");
+    registerMidiLearnTarget(&arpModeBtn, "ARP_BTN");
+    for (int i = 0; i < audioChannels.size(); ++i)
+        registerMidiLearnTarget(&audioChannels[i]->volumeSlider, "AUDIO_VOL_" + juce::String(i));
+    for (int i = 0; i < midiChannels.size(); ++i)
+        registerMidiLearnTarget(&midiChannels[i]->velSlider, "MIDI_VEL_" + juce::String(i));
+    loadMidiLearn();
+
     menuBar = std::make_unique<juce::MenuBarComponent>(this);
     addAndMakeVisible(*menuBar);
     formatManager.registerBasicFormats();
@@ -589,6 +603,8 @@ void MainComponent::addMidiChannel()
         };
 
     channelContainer.addAndMakeVisible(strip);
+    
+
     layoutDynamicChannels();
 }
 
@@ -656,6 +672,50 @@ void MainComponent::triggerInternalSynths(const juce::MidiMessage& message, floa
             return;
 
         keyboardState.processNextMidiEvent(message);
+        
+        // --- PRIORIDAD 1: MIDI LEARN PERSONALIZADO (CLIC DERECHO) ---
+        if (message.isController() || message.isNoteOn(false))
+        {
+            int ch = message.getChannel();
+            int learnKey = message.isController()
+                ? (ch * 200) + message.getControllerNumber()
+                : 10000 + (ch * 200) + message.getNoteNumber();
+            float normVal = message.isController() ? (message.getControllerValue() / 127.0f) : 1.0f;
+
+            if (pendingLearnTarget != nullptr)
+            {
+                auto* targetComp = pendingLearnTarget;
+                auto targetId = pendingLearnTargetId;
+                pendingLearnTarget = nullptr;
+                pendingLearnTargetId.clear();
+
+                juce::MessageManager::callAsync([this, learnKey, targetComp, targetId]()
+                    {
+                        for (int i = midiLearnBindings.size() - 1; i >= 0; --i)
+                            if (midiLearnBindings[i].targetId == targetId || midiLearnBindings[i].midiKey == learnKey)
+                                midiLearnBindings.remove(i);
+                        midiLearnBindings.add({ learnKey, targetComp, targetId });
+                        saveMidiLearn();
+                    });
+                return;
+            }
+
+            for (const auto& b : midiLearnBindings)
+            {
+                if (b.midiKey == learnKey && b.target != nullptr)
+                {
+                    auto* comp = b.target;
+                    juce::MessageManager::callAsync([comp, normVal]()
+                        {
+                            if (auto* s = dynamic_cast<juce::Slider*>(comp))
+                                s->setValue(s->getMinimum() + normVal * (s->getMaximum() - s->getMinimum()), juce::sendNotificationSync);
+                            else if (auto* btn = dynamic_cast<juce::Button*>(comp))
+                                btn->triggerClick();
+                        });
+                    return;
+                }
+            }
+        }
         // --- AUTO-MAPEO MIDI UNIVERSAL (FADERS, KNOBS Y BOTONES DE CUALQUIER CONTROLADOR) ---
         {
             bool isMmcPlay = false, isMmcStop = false, isMmcRec = false;
@@ -2430,4 +2490,90 @@ void MainComponent::loadAutoMap()
         for (auto& s : juce::StringArray::fromTokens(lines[0], ",", "")) autoMappedCCs.add(s.getIntValue());
     if (lines.size() > 1 && lines[1].isNotEmpty())
         for (auto& s : juce::StringArray::fromTokens(lines[1], ",", "")) autoMappedButtons.add(s.getIntValue());
+}
+void MainComponent::registerMidiLearnTarget(juce::Component* comp, const juce::String& id)
+{
+    if (comp == nullptr) return;
+    comp->setComponentID(id);
+    comp->addMouseListener(this, true);
+}
+
+void MainComponent::mouseDown(const juce::MouseEvent& e)
+{
+    if (!e.mods.isRightButtonDown()) return;
+
+    juce::Component* comp = e.eventComponent;
+    while (comp != nullptr && comp->getComponentID().isEmpty() && comp != this)
+        comp = comp->getParentComponent();
+
+    if (comp == nullptr || comp == this || comp->getComponentID().isEmpty()) return;
+
+    juce::String targetId = comp->getComponentID();
+    juce::PopupMenu menu;
+    menu.addItem(1, "MIDI Learn: Mover control en Akai / Arturia...");
+    menu.addItem(2, "Quitar asignacion MIDI de este control");
+
+    menu.showMenuAsync(juce::PopupMenu::Options(), [this, comp, targetId](int result)
+        {
+            if (result == 1)
+            {
+                pendingLearnTarget = comp;
+                pendingLearnTargetId = targetId;
+            }
+            else if (result == 2)
+            {
+                for (int i = midiLearnBindings.size() - 1; i >= 0; --i)
+                    if (midiLearnBindings[i].targetId == targetId)
+                        midiLearnBindings.remove(i);
+                saveMidiLearn();
+            }
+        });
+}
+
+juce::Component* MainComponent::findLearnTargetById(const juce::String& id)
+{
+    if (id == "MASTER_VOL") return &masterVolumeSlider;
+    if (id == "FILTER_CUTOFF") return &filterCutoffSlider;
+    if (id == "FILTER_RES") return &filterResonanceSlider;
+    if (id == "REVERB_MIX") return &reverbMixSlider;
+    if (id == "PLAY_BTN") return &playButton;
+    if (id == "STOP_BTN") return &stopButton;
+    if (id == "REC_BTN") return &recWavButton;
+    if (id == "ARP_BTN") return &arpModeBtn;
+
+    if (id.startsWith("AUDIO_VOL_"))
+    {
+        int idx = id.fromFirstOccurrenceOf("AUDIO_VOL_", false, false).getIntValue();
+        if (idx >= 0 && idx < audioChannels.size()) return &audioChannels[idx]->volumeSlider;
+    }
+    if (id.startsWith("MIDI_VEL_"))
+    {
+        int idx = id.fromFirstOccurrenceOf("MIDI_VEL_", false, false).getIntValue();
+        if (idx >= 0 && idx < midiChannels.size()) return &midiChannels[idx]->velSlider;
+    }
+    return nullptr;
+}
+
+void MainComponent::saveMidiLearn()
+{
+    auto file = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory).getChildFile("midaw_midi_learn.txt");
+    juce::StringArray lines;
+    for (auto& b : midiLearnBindings)
+        lines.add(juce::String(b.midiKey) + "=" + b.targetId);
+    file.replaceWithText(lines.joinIntoString("\n"));
+}
+
+void MainComponent::loadMidiLearn()
+{
+    auto file = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory).getChildFile("midaw_midi_learn.txt");
+    if (!file.existsAsFile()) return;
+    midiLearnBindings.clear();
+    for (auto& line : juce::StringArray::fromLines(file.loadFileAsString()))
+    {
+        if (!line.contains("=")) continue;
+        int key = line.upToFirstOccurrenceOf("=", false, false).getIntValue();
+        juce::String id = line.fromFirstOccurrenceOf("=", false, false).trim();
+        if (auto* comp = findLearnTargetById(id))
+            midiLearnBindings.add({ key, comp, id });
+    }
 }

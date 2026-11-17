@@ -1575,6 +1575,21 @@ juce::Array<int> autoMappedCCs;
 juce::Array<int> autoMappedButtons;
 void saveAutoMap();
 void loadAutoMap();
+struct MidiLearnBinding
+{
+    int midiKey = 0; // (ch * 200) + cc  o  10000 + (ch * 200) + note
+    juce::Component* target = nullptr;
+    juce::String targetId;
+};
+juce::Array<MidiLearnBinding> midiLearnBindings;
+juce::Component* pendingLearnTarget = nullptr;
+juce::String pendingLearnTargetId;
+
+void mouseDown(const juce::MouseEvent& e) override;
+void registerMidiLearnTarget(juce::Component* comp, const juce::String& id);
+juce::Component* findLearnTargetById(const juce::String& id);
+void saveMidiLearn();
+void loadMidiLearn();
 
 JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };
