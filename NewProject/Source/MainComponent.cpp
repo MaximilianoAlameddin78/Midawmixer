@@ -1962,6 +1962,8 @@ void MainComponent::rebuildBrowserList()
                         addInstrument(2, "Pad Atmosferico", 1);
                         addInstrument(2, "Saw Lead Solista", 3);
                         addInstrument(2, "Bass Analogico", 3);
+                        addInstrument(2, "Analog Synth Pro", 8);
+
                     }
 
                     // Carpeta 3: Bajo y Guitarras

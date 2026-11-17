@@ -220,6 +220,11 @@ public:
             currentAngle = 0.0;
             level = velocity * 0.75;
             tailOff = 0.0;
+            lpBuf0 = 0.0f; lpBuf1 = 0.0f;
+            analogAdsr.setSampleRate(getSampleRate());
+            analogAdsr.setParameters(analogAdsrParams);
+            analogAdsr.noteOn();
+
             currentMidiNote = midiNoteNumber;
             drumEnv = 1.0;
             pitchEnv = 1.0;
@@ -268,6 +273,12 @@ public:
         {
             if (presetType == 4)
                 return;
+            if (presetType == 8)
+            {
+                if (allowTailOff) analogAdsr.noteOff();
+                else { analogAdsr.reset(); clearCurrentNote(); angleDelta = 0.0; }
+                return;
+            }
 
             if (allowTailOff)
             {
@@ -363,6 +374,44 @@ public:
                             stringPrevSample = 0.62f * stringPrevSample + 0.38f * amp;
                             raw = stringPrevSample * 0.95f;
                         }
+                        else if (presetType == 8) // ANALOG SYNTH PRO (SAW / SQUARE / TRIANGLE / SUB + ADSR + LFO)
+                        {
+                            double effectiveDelta = angleDelta * pitchBendFactor;
+                            float phase = (float)std::fmod(currentAngle, 1.0);
+                            float subPhase = (float)std::fmod(currentAngle * 0.5, 1.0);
+
+                            float osc = 0.0f;
+                            if (analogWaveType == 0) // SAW
+                                osc = (2.0f * phase - 1.0f);
+                            else if (analogWaveType == 1) // SQUARE
+                                osc = (phase < 0.5f) ? 0.85f : -0.85f;
+                            else if (analogWaveType == 2) // TRIANGLE
+                                osc = 4.0f * std::abs(phase - 0.5f) - 1.0f;
+                            else // SAW + SUB (-1 OCTAVE)
+                                osc = 0.7f * (2.0f * phase - 1.0f) + 0.55f * ((subPhase < 0.5f) ? 1.0f : -1.0f);
+
+                            // LFO modulando corte de filtro
+                            lfoPhase += (double)analogLfoRate / getSampleRate();
+                            if (lfoPhase >= 1.0) lfoPhase -= 1.0;
+                            float lfoVal = (float)std::sin(lfoPhase * 2.0 * 3.14159265359);
+
+                            float baseCut = juce::jlimit(0.02f, 0.92f, analogCutoff + lfoVal * analogLfoDepth * 0.45f);
+                            float fb = analogResonance + analogResonance / (1.0f - baseCut);
+                            lpBuf0 += baseCut * (osc - lpBuf0 + fb * (lpBuf0 - lpBuf1));
+                            lpBuf1 += baseCut * (lpBuf0 - lpBuf1);
+
+                            float envVal = analogAdsr.getNextSample();
+                            raw = std::tanh(lpBuf1 * 1.35f) * envVal;
+
+                            if (!analogAdsr.isActive())
+                            {
+                                clearCurrentNote();
+                                angleDelta = 0.0;
+                                baseAngleDelta = 0.0;
+                                break;
+                            }
+                        }
+
                     }
                     else if (presetType == 4) // BATERIA
                     {
@@ -424,6 +473,15 @@ public:
                     ++startSample;
                     if (tailOff > 0.0)
                     {
+                        int analogWaveType = 0; // 0=Saw, 1=Square, 2=Triangle, 3=Saw+Sub
+                        float analogCutoff = 0.45f;
+                        float analogResonance = 0.35f;
+                        float analogLfoRate = 2.5f;
+                        float analogLfoDepth = 0.25f;
+                        float lpBuf0 = 0.0f, lpBuf1 = 0.0f;
+                        juce::ADSR analogAdsr;
+                        juce::ADSR::Parameters analogAdsrParams{ 0.02f, 0.25f, 0.65f, 0.35f };
+
                         tailOff *= 0.99;
                         if (tailOff <= 0.005)
                         {
@@ -464,6 +522,15 @@ public:
         double pitchEnv = 0.0;
         float lastNoiseSample = 0.0f;
         juce::Random drumRng;
+        int analogWaveType = 0; // 0=Saw, 1=Square, 2=Triangle, 3=Saw+Sub
+        float analogCutoff = 0.45f;
+        float analogResonance = 0.35f;
+        float analogLfoRate = 2.5f;
+        float analogLfoDepth = 0.25f;
+        float lpBuf0 = 0.0f, lpBuf1 = 0.0f;
+        juce::ADSR analogAdsr;
+        juce::ADSR::Parameters analogAdsrParams{ 0.02f, 0.25f, 0.65f, 0.35f };
+
     };
     class MidiChannelStrip : public juce::Component
     {
@@ -492,6 +559,7 @@ public:
             instSelector.addItem("Bajo Electrico", 6);
             instSelector.addItem("Guitarra Acustica", 7);
             instSelector.addItem("Guitarra Electrica", 8);
+            instSelector.addItem("Analog Synth Pro", 9);
 
             instSelector.setSelectedId(1, juce::dontSendNotification);
             selectedInstrumentMode = 0;
