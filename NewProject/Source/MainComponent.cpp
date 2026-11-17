@@ -693,16 +693,16 @@ void MainComponent::triggerInternalSynths(const juce::MidiMessage& message, floa
                 || devName.contains("kontrol") || devName.contains("mpk")
                 || devName.contains("minilab") || devName.contains("keylab")
                 || devName.contains("midiin2") || devName.contains("daw");
-
             int noteNum = message.getNoteNumber();
             int vel = message.getVelocity();
             bool isSwitchVelocity = (vel == 127 || vel == 1);
 
             bool isFunctionNote = message.isNoteOn(false) && (
-                noteNum < 36 ||
                 noteNum >= 96 ||
                 (noteNum >= 64 && noteNum <= 89 && (isControllerPort || isSwitchVelocity))
                 );
+
+           
 
             // Botones de funcion que envian Notas (APC Mini filas/columnas 64-122, Shift, Mackie, etc.)
             if (isFunctionNote)
@@ -886,7 +886,7 @@ void MainComponent::triggerInternalSynths(const juce::MidiMessage& message, floa
                 {
                     double relTime = (juce::Time::getMillisecondCounterHiRes() * 0.001) - m->recordStartTime;
                     m->recordedEvents.push_back({ relTime, message });
-                    if ((m->isRecording || (isRecordingMaster && m->recButton.getToggleState())) && message.isNoteOnOrOff())
+                    if ((m->isRecording || (isRecordingMaster && m->recButton.getToggleState())) && message.isNoteOnOrOff() && arpMode == 0)
 
                     {
                         int tlTrack = audioChannels.size() + i;
@@ -1082,6 +1082,47 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
                     filteredMidi.addEvent(juce::MidiMessage::noteOn(arpMidiChannel, noteToPlay, (juce::uint8)110), pos);
                     arpLastNote = noteToPlay;
                     arpSampleCounter += samplesPerStep;
+                    double stepDurSec = 60.0 / currentBpm / 4.0;
+                    juce::MessageManager::callAsync([this, noteToPlay, stepDurSec]()
+                        {
+                            for (int i = 0; i < midiChannels.size(); ++i)
+                            {
+                                auto* m = midiChannels[i];
+                                if ((m->isRecording || (isRecordingMaster && m->recButton.getToggleState())) && (arpTargetChannelsMask & (1 << i)))
+                                {
+                                    int tlTrack = audioChannels.size() + i;
+                                    TimelineClip* activeMidiClip = nullptr;
+                                    for (int c = (int)arrangementTimeline.clips.size() - 1; c >= 0; --c)
+                                    {
+                                        if (arrangementTimeline.clips[c].isMidi && arrangementTimeline.clips[c].trackIndex == tlTrack
+                                            && std::abs((arrangementTimeline.clips[c].startSec + arrangementTimeline.clips[c].durationSec) - arrangementTimeline.playheadSec) < 2.5)
+                                        {
+                                            activeMidiClip = &arrangementTimeline.clips[c];
+                                            break;
+                                        }
+                                    }
+                                    if (activeMidiClip == nullptr)
+                                    {
+                                        TimelineClip nc;
+                                        nc.trackIndex = tlTrack;
+                                        nc.isMidi = true;
+                                        nc.name = m->assignedInstrumentName + " (ARP)";
+                                        nc.colour = juce::Colours::deepskyblue;
+                                        nc.startSec = arrangementTimeline.playheadSec;
+                                        nc.durationSec = stepDurSec;
+                                        nc.maxDurationSec = stepDurSec;
+                                        arrangementTimeline.clips.push_back(nc);
+                                        activeMidiClip = &arrangementTimeline.clips.back();
+                                    }
+                                    double noteOffset = juce::jmax(0.0, arrangementTimeline.playheadSec - activeMidiClip->startSec);
+                                    activeMidiClip->midiNotes.push_back({ noteOffset, stepDurSec * 0.9, noteToPlay });
+
+                                    activeMidiClip->durationSec = juce::jmax(activeMidiClip->durationSec, noteOffset + stepDurSec);
+                                    activeMidiClip->maxDurationSec = activeMidiClip->durationSec;
+                                }
+                            }
+                        });
+
                 }
 
                 int advance = juce::jmin(numSamples - pos, (int)std::ceil(arpSampleCounter));
